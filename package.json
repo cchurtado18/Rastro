@@ -1,0 +1,13 @@
+{
+  "name": "rastro",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sigue las wallets de Solana de las personas que te interesan y detecta su wallet activa",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node cli.js check",
+    "watch": "node cli.js watch",
+    "test": "node --test tests/trace.test.js tests/convergence.test.js"
+  }
+}
