@@ -8,6 +8,6 @@
     "start": "node server.js",
     "check": "node cli.js check",
     "watch": "node cli.js watch",
-    "test": "node --test tests/trace.test.js tests/convergence.test.js"
+    "test": "node --test tests/trace.test.js tests/convergence.test.js tests/history.test.js tests/trading.test.js"
   }
 }

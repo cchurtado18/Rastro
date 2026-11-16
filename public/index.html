@@ -33,8 +33,11 @@
   .dot.on { background: var(--red); box-shadow: 0 0 0 0 rgba(255,107,107,.7); animation: beat 1.4s infinite; }
   @keyframes beat { 70% { box-shadow: 0 0 0 9px rgba(255,107,107,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0); } }
 
-  .app { display: grid; grid-template-columns: 290px 1fr 330px; min-height: 0; }
+  .app { display: grid; grid-template-columns: 250px 1fr 370px; min-height: 0; }
   aside, .side { background: var(--panel); min-height: 0; overflow-y: auto; }
+  .side { display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+  .side .pane { overflow-y: auto; min-height: 0; display: none; }
+  .side .pane.on { display: block; }
   aside { border-right: 1px solid var(--line); }
   .side { border-left: 1px solid var(--line); }
   .sec { padding: 14px 14px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); font-weight: 650; }
@@ -55,12 +58,9 @@
   .psub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
   .badge { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: rgba(255,184,77,.15); color: var(--amber); }
 
-  .stage { position: relative; min-height: 0; overflow: hidden; background: radial-gradient(circle at 50% 40%, #121722 0%, var(--bg) 70%); }
+  .stage { position: absolute; inset: 0; overflow: hidden; background: radial-gradient(circle at 50% 40%, #121722 0%, var(--bg) 70%); }
   .stage svg { width: 100%; height: 100%; display: block; cursor: grab; }
   .stage svg:active { cursor: grabbing; }
-  .title { position: absolute; left: 16px; top: 14px; pointer-events: none; }
-  .title h2 { margin: 0; font-size: 20px; }
-  .title p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
   .legend { position: absolute; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; font-size: 11.5px; color: var(--muted); pointer-events: none;
             background: rgba(18,21,27,.8); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; backdrop-filter: blur(4px); }
   .legend { pointer-events: auto; cursor: help; }
@@ -68,6 +68,7 @@
   .legend span { display: none; }
   .legend:hover span, .legend.open span { display: block; }
   .legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--c); }
+  .feed { transition: opacity .6s; }
   .feed { position: absolute; left: 14px; bottom: 14px; width: min(440px, calc(100% - 28px)); max-height: 42%; overflow: hidden; display: flex; flex-direction: column-reverse; gap: 4px; pointer-events: none;
           mask-image: linear-gradient(to top, #000 60%, transparent); -webkit-mask-image: linear-gradient(to top, #000 60%, transparent); }
   .fi { background: rgba(18,21,27,.88); border: 1px solid var(--line); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; animation: pop .25s ease-out; backdrop-filter: blur(4px); }
@@ -100,7 +101,8 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .pulse { animation: pulse 1.6s ease-out infinite; transform-box: fill-box; transform-origin: center; pointer-events: none; }
   @keyframes pulse { from { opacity: .8; transform: scale(1); } to { opacity: 0; transform: scale(2.3); } }
-  .path { position: absolute; left: 16px; right: 16px; top: 62px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+  .path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 10px 16px 12px; }
+  .path:empty { display: none; }
   .path .chip { pointer-events: auto; display: inline-flex; flex-direction: column; gap: 1px; padding: 5px 10px; border-radius: 10px; background: rgba(23,27,34,.9); border: 1px solid var(--line);
                 font-family: ui-monospace, monospace; font-size: 12px; backdrop-filter: blur(4px); }
   .path .chip em { font-style: normal; font-family: ui-sans-serif, -apple-system, sans-serif; font-size: 9.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); }
@@ -139,9 +141,137 @@
   .conv-card .who em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
   .conv-card .meta { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
   .muted { color: var(--muted); font-size: 12.5px; padding: 4px 14px 12px; }
+  .caform { display: flex; gap: 6px; padding: 12px 12px 8px; }
+  .caform input { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .cahist { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 10px; }
+  .cahist button { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 3px 8px; border-radius: 999px; font-size: 11.5px; }
+  .cahist button:hover { color: var(--text); }
+  .catok { padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+  .catok b { font-size: 16px; } .catok .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .catok .meta a { color: var(--muted); margin-left: 8px; }
+  .cahead { padding: 8px 14px; font-size: 12.5px; background: var(--panel2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .cahead.hit { color: var(--green); } .cahead.none { color: var(--muted); }
+  .cahit { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .cahit .top { display: flex; align-items: center; gap: 8px; }
+  .cahit .av { width: 26px; height: 26px; font-size: 12px; flex: none; }
+  .cahit .who { font-weight: 650; cursor: pointer; } .cahit .who:hover { text-decoration: underline; }
+  .cahit .rl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); border-radius: 999px; padding: 1px 7px; margin-left: auto; white-space: nowrap; }
+  .cahit .wl { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+  .cahit .nums { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; margin: 7px 0 4px; font-size: 12.5px; }
+  .cahit .nums span { color: var(--muted); } .cahit .nums b { font-weight: 600; }
+  .cahit .hold { color: var(--green); } .cahit .gone { color: var(--muted); }
+  .cahit details { margin-top: 4px; } .cahit summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .cahit .trs { margin-top: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .cahit .trs div { display: flex; gap: 8px; padding: 2px 0; } .cahit .trs a { color: var(--muted); margin-left: auto; }
+  .cahit .b { color: var(--green); } .cahit .s { color: var(--red); }
+  .tl1 .lk a[data-ca] { cursor: pointer; }
 
-  .center { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
-  .cmp { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 16px 14px; max-height: 46vh; overflow-y: auto; }
+  /* Columna central: barra de la persona, pestañas y contenido */
+  .main { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; min-width: 0; }
+  .pbar { background: var(--panel); border-bottom: 1px solid var(--line); }
+  .pbar-top { display: flex; align-items: center; gap: 14px; padding: 14px 16px 0; flex-wrap: wrap; }
+  .pbar-top .av { width: 44px; height: 44px; font-size: 17px; }
+  .pbar-top .who { min-width: 140px; }
+  .pbar-top h2 { margin: 0; font-size: 19px; }
+  .pbar-top p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+  .pbar-top .acts { margin-left: auto; display: flex; gap: 6px; }
+  .pbar-top .acts button { padding: 6px 11px; font-size: 12px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px 16px 0; }
+  .kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; min-width: 0; }
+  .kpi span { display: block; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 650; }
+  .kpi b { display: block; font-size: 16px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi b.mono { font-family: ui-monospace, monospace; font-size: 14px; color: var(--green); }
+  .kpi small { color: var(--muted); font-size: 11.5px; }
+  .tabs { display: flex; align-items: center; gap: 2px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); min-height: 44px; }
+  .tabs > button.tab { background: transparent; color: var(--muted); border-radius: 0; padding: 12px 12px 11px; font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent; }
+  .tabs > button.tab:hover { color: var(--text); }
+  .tabs > button.tab.on { color: var(--text); border-bottom-color: var(--green); }
+  .tabs .n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 99px; background: var(--panel2); color: var(--muted); font-size: 11px; line-height: 18px; text-align: center; }
+  .tabs .n.hot { background: var(--amber); color: #0a0c10; }
+  .tabs .tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .tabs .tools button { padding: 5px 10px; font-size: 12px; }
+  .body { position: relative; min-height: 0; overflow: hidden; }
+  .body > section { position: absolute; inset: 0; display: none; }
+  .body > section.on { display: block; }
+  .cmp { background: var(--panel); padding: 14px 16px 16px; overflow-y: auto; }
+  .cmp .muted { padding: 8px 0; }
+  /* Tarjeta de la wallet seleccionada, encima del mapa */
+  .wcard { position: absolute; right: 14px; top: 14px; width: 290px; max-height: calc(100% - 28px); overflow-y: auto; background: rgba(18,21,27,.94); border: 1px solid var(--line);
+           border-radius: 14px; backdrop-filter: blur(6px); box-shadow: 0 10px 30px rgba(0,0,0,.35); z-index: 3; }
+  .wcard .card { margin: 0; background: transparent; border: 0; }
+  .wcard .x { position: absolute; right: 8px; top: 8px; background: transparent; color: var(--muted); padding: 2px 8px; font-size: 16px; }
+  .wcard .x:hover { color: var(--text); }
+  .wcard .more { display: block; width: calc(100% - 26px); margin: 0 13px 13px; }
+  .wcard[hidden] { display: none; }
+  /* Columna derecha: actividad */
+  .side .tabs { padding: 0 6px; }
+  .side .tabs > button.tab { padding: 12px 6px 11px; font-size: 12px; white-space: nowrap; flex: none; }
+  .side > * { min-width: 0; }
+  .side .tabs { overflow-x: auto; scrollbar-width: none; }
+  .filters { display: flex; gap: 6px; padding: 10px 14px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .filters .seg button { padding: 4px 10px; font-size: 11.5px; }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; padding: 3px 8px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); }
+  .fchip button { background: transparent; color: var(--muted); padding: 0; font-size: 13px; }
+  .tr { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .tr:hover { background: var(--panel2); }
+  .tr .av { width: 30px; height: 30px; font-size: 12px; }
+  .tr .tok { font-weight: 700; text-decoration: none; } .tr .tok:hover { color: var(--blue); }
+  .tr .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .tr .amt2 { text-align: right; font-variant-numeric: tabular-nums; font-weight: 650; }
+  .tr .amt2 small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; margin-top: 2px; }
+  .tr .amt2 a { text-decoration: none; }
+  .tr .side-b { color: var(--green); } .tr .side-s { color: var(--red); }
+  .tr.new { animation: flashrow 2.4s ease-out; }
+  @keyframes flashrow { from { background: rgba(61,220,151,.18); } }
+  .day { padding: 8px 14px 4px; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; font-weight: 700; }
+  /* Terminal (abajo del mapa): compras con CA y movimientos de wallet, lo nuevo arriba */
+  .term { position: relative; background: #07090c; border-top: 1px solid var(--line); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+          display: grid; grid-template-rows: auto auto 1fr; height: 190px; min-height: 0; }
+  .tgrip { position: absolute; left: 0; right: 0; top: -4px; height: 8px; cursor: ns-resize; z-index: 3; }
+  .tgrip::after { content: ''; position: absolute; left: 50%; top: 3px; width: 44px; height: 3px; margin-left: -22px; border-radius: 3px; background: #2a313c; }
+  .tgrip:hover::after, body.resizing .tgrip::after { background: var(--green); }
+  body.resizing, body.resizing * { cursor: ns-resize !important; user-select: none; }
+  .term.min { height: auto; } .term.min .tbody, .term.min .tcols { display: none; }
+  .thead { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #0d1015; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11.5px; user-select: none; flex-wrap: nowrap; white-space: nowrap; min-width: 0; }
+  .tcount { color: #4a525e; }
+  @media (max-width: 1300px) { .tcount { display: none; } }
+  .thead .tt { color: var(--green); font-weight: 700; letter-spacing: .4px; }
+  .thead .tt::before { content: '\258D'; animation: blink 1.1s steps(1) infinite; margin-right: 4px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .thead .seg button { padding: 2px 8px; font-size: 11px; font-family: inherit; }
+  .thead .tq { margin-left: auto; flex: 1; min-width: 90px; max-width: 260px; padding: 4px 9px; font: inherit; font-size: 11.5px; background: #07090c; border-radius: 7px; }
+  .thead button.tb { background: transparent; color: var(--muted); padding: 2px 8px; font-size: 11.5px; font-family: inherit; border: 1px solid var(--line); border-radius: 6px; }
+  .thead button.tb:hover, .thead button.tb.on { color: var(--text); border-color: #3a4352; }
+  .thead button.tb.on { color: var(--amber); border-color: rgba(255,184,77,.5); }
+  .tcols, .tl1 { display: grid; grid-template-columns: 106px 44px 62px 74px 84px 100px minmax(0,1fr); gap: 8px; padding: 1px 10px; white-space: nowrap; position: relative; }
+  .tcols { color: #4a525e; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; padding: 4px 10px; border-bottom: 1px solid #141920; }
+  .tcols .r, .tl1 .a { text-align: right; }
+  .tbody { overflow-y: auto; padding: 4px 0 8px; min-height: 0; }
+  .tl1 { color: #c9d1d9; cursor: copy; border-left: 2px solid transparent; font-size: 11.5px; }
+  .tl1:hover { background: #10151c; }
+  .tl1 > span { overflow: hidden; text-overflow: ellipsis; }
+  .tl1 .t { color: #5d6672; } .tl1 .n { color: #e3b8ff; } .tl1 .w { color: #7d8794; } .tl1 .a { color: #ffd38a; }
+  .tl1 .ty { font-weight: 800; letter-spacing: .3px; }
+  .tl1.buy { border-left-color: var(--green); } .tl1.buy .ty { color: var(--green); }
+  .tl1.sell { border-left-color: var(--red); } .tl1.sell .ty { color: var(--red); }
+  .tl1.out { border-left-color: var(--amber); } .tl1.out .ty { color: var(--amber); }
+  .tl1.in { border-left-color: var(--blue); } .tl1.in .ty { color: var(--blue); }
+  .tl1.switch { border-left-color: var(--violet); background: rgba(177,140,255,.06); } .tl1.switch .ty { color: var(--violet); }
+  .tl1 .k { color: #fff; font-weight: 700; }
+  .tl1 .k.wl { color: var(--amber); font-weight: 600; } .tl1.in .k.wl { color: var(--blue); } .tl1.switch .k.wl { color: var(--violet); }
+  .tl1 .ca { color: #7ee0ff; } .tl1 .ca i { font-style: normal; color: #4a525e; }
+  .tl1.out .ca, .tl1.in .ca, .tl1.switch .ca { color: #ffcf8a; } .tl1.in .ca { color: #9cc8ff; } .tl1.switch .ca { color: #d4c2ff; }
+  .tl1 .x { color: var(--red); font-weight: 700; } .tl1 .cv { color: var(--amber); }
+  .tl1 .lk { position: absolute; right: 8px; top: 0; bottom: 0; display: flex; gap: 8px; align-items: center; padding-left: 14px; opacity: 0; background: linear-gradient(90deg, transparent, #10151c 12px); }
+  .tl1:hover .lk { opacity: 1; }
+  .tl1 .lk a { color: #6a7480; text-decoration: none; } .tl1 .lk a:hover { color: var(--text); }
+  .tl1.new { animation: flashrow 2.4s ease-out; }
+  .tprompt { padding: 3px 12px; color: #5d6672; } .tprompt b { color: var(--green); font-weight: 400; }
+  .tnew { position: absolute; left: 50%; top: 66px; transform: translateX(-50%); padding: 3px 12px; font-size: 11.5px; border-radius: 99px; background: var(--green); color: #07090c; z-index: 2; font-family: inherit; }
+  .tnew[hidden] { display: none; }
+  .addwrap { border-bottom: 1px solid var(--line); }
+  .addwrap[hidden] { display: none; }
+  .add { padding-top: 12px; }
   .cmp-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
   .verdict { font-size: 14.5px; font-weight: 600; line-height: 1.4; }
   .verdict small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
@@ -173,13 +303,20 @@
   .toast code { color: var(--text); font-weight: 400; }
   .wtag { font-family: ui-monospace, monospace; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
 
+  @media (max-width: 1180px) and (min-width: 1001px) { .app { grid-template-columns: 220px 1fr 320px; } .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); } }
   @media (max-width: 1000px) {
     body { overflow: auto; }
     .app { grid-template-columns: 1fr; }
     aside { max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
-    .stage { height: 70vh; }
-    .cmp { max-height: none; }
-    .side { border-left: 0; border-top: 1px solid var(--line); }
+    .body { height: 72vh; }
+    .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .wcard { width: auto; left: 10px; right: 10px; top: auto; bottom: 10px; max-height: 45%; }
+    .side { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+    .side .pane { max-height: 70vh; }
+    .term { height: 300px; }
+    .tcols { display: none; }
+    .tl1 { grid-template-columns: 86px 44px 64px 1fr; } .tl1 .w, .tl1 .a, .tl1 .k, .tl1 .lk { display: none; }
+    .thead .tq { width: 100%; margin-left: 0; }
     .search { display: none; }
     .legend { top: auto; bottom: 12px; right: 12px; max-width: 45%; flex-direction: column; align-items: flex-end; gap: 4px; }
     .feed { width: calc(55% - 20px); }
@@ -190,27 +327,39 @@
 <body>
 <header>
   <div class="logo"><b></b>rastro</div>
-  <div class="search"><input id="q" placeholder="Buscar persona o cualquier wallet de su historial…" autocomplete="off"></div>
-  <div class="live"><span class="dot" id="dot"></span><span id="status">—</span><button class="ghost" id="refresh">Revisar todos</button></div>
+  <div class="search"><input id="q" placeholder="Buscar persona, wallet o el CA de una moneda…" autocomplete="off"></div>
+  <div class="live"><span class="dot" id="dot"></span><span id="status">—</span><button class="ghost" id="refresh">Revisar todos</button><button id="addBtn">+ Seguir</button></div>
 </header>
 <div class="app">
   <aside>
-    <div class="sec">Seguir a alguien</div>
-    <form class="add" id="add">
-      <input name="name" placeholder="Nombre o alias" required>
-      <input name="wallet" placeholder="Wallet de Solana" required>
-      <button>Seguir</button>
-      <div class="err" id="err"></div>
-    </form>
-    <div class="sec">Siguiendo</div>
+    <div class="addwrap" id="addwrap" hidden>
+      <div class="sec">Seguir a alguien</div>
+      <form class="add" id="add">
+        <input name="name" placeholder="Nombre o alias" required>
+        <input name="wallet" placeholder="Wallet de Solana" required>
+        <button>Seguir</button>
+        <div class="err" id="err"></div>
+      </form>
+    </div>
+    <div class="sec" id="peopleSec">Siguiendo</div>
     <div id="people"></div>
   </aside>
-  <div class="center">
-  <section class="stage" id="stage">
-    <svg id="svg"></svg>
-    <div class="title"><h2 id="gtitle"></h2><p id="gsub"></p></div>
+  <div class="main">
+  <div class="pbar" id="pbar">
+    <div class="pbar-top"><div class="av" id="pav"></div><div class="who"><h2 id="gtitle"></h2><p id="gsub"></p></div>
+      <div class="acts" id="pacts"></div></div>
+    <div class="kpis" id="kpis"></div>
     <div class="path" id="path"></div>
-    <div class="ctrl"><div class="seg" id="viewSeg"><button data-v="neural">🧠 Red neuronal</button><button data-v="radial">◎ Radial</button></div><button class="ghost" id="fitRoot" title="Centrar en la wallet raíz">◎ Raíz</button><button class="ghost" id="fitAll" title="Ver todo el mapa">⤢ Ver todo</button></div>
+  </div>
+  <div class="tabs" id="mainTabs">
+    <button class="tab" data-tab="map">🧠 Red de wallets</button>
+    <button class="tab" data-tab="cmp">⚖ Comparar wallets</button>
+    <div class="tools" id="mapTools"><div class="seg" id="viewSeg"><button data-v="neural">Neuronal</button><button data-v="radial">Radial</button></div><button class="ghost" id="fitRoot" title="Centrar en la wallet raíz">◎ Raíz</button><button class="ghost" id="fitAll" title="Ver todo el mapa">⤢ Ver todo</button></div>
+  </div>
+  <div class="body">
+  <section class="stage" id="stage" data-pane="map">
+    <svg id="svg"></svg>
+    <div class="wcard" id="wcard" hidden></div>
     <div class="legend" id="legend" title="Qué significa cada color">
       <b>ⓘ Colores</b>
       <span style="--c:#f3f0ff">raíz (de donde partes)</span><span style="--c:var(--green)">activa: con la que compra</span><span style="--c:var(--slate)">wallet anterior</span>
@@ -220,22 +369,49 @@
     <div class="feed" id="feed"></div>
     <div class="empty" id="empty">Agrega a alguien con su wallet.<br>Aquí vas a ver su red de wallets armándose en vivo.</div>
   </section>
-  <section class="cmp" id="cmp" style="display:none">
+  <section class="cmp" id="cmp" data-pane="cmp">
+    <div id="cmpEmpty" class="muted"></div>
+    <div id="cmpBody">
     <div class="cmp-head"><div class="verdict" id="verdict"></div>
       <div class="seg" id="range"><button data-r="86400">24 h</button><button data-r="604800" class="on">7 días</button></div></div>
     <div class="wcards" id="wcards"></div>
+    <div class="sec" style="padding:16px 0 0">Cuándo compra con cada wallet</div>
     <div class="tl" id="tl"></div>
+    </div>
+  </section>
+  </div>
+  <section class="term" id="term">
+    <div class="tgrip" id="tgrip" title="Arrastra para hacer la terminal más alta o más baja"></div>
+    <div class="thead"><span class="tt">terminal</span><span id="tcount" class="tcount"></span>
+      <div class="seg" id="tkind"></div><div class="seg" id="twho"></div>
+      <input id="tq" class="tq" placeholder="grep: $símbolo, CA, wallet, nombre…" autocomplete="off" spellcheck="false">
+      <button class="tb" id="tpause" title="Pausar: las líneas nuevas esperan hasta que la reanudes">⏸</button>
+      <button class="tb" id="tmin" title="Minimizar / abrir">▾</button></div>
+    <div class="tcols"><span>hora</span><span>tipo</span><span>quién</span><span>wallet</span><span class="r">monto</span><span>moneda / destino</span><span>CA / dirección · click = copiar</span></div>
+    <div class="tbody" id="tbody"></div>
+    <button class="tnew" id="tnew" hidden>↑ nuevas</button>
   </section>
   </div>
   <div class="tip" id="tip"></div>
   <div class="toast" id="toast"></div>
   <section class="side">
-    <div class="sec">Perfil</div>
-    <div id="profile"><div class="muted">Toca una wallet de la red para ver su detalle.</div></div>
-    <div class="sec" id="convSec">Coincidencias · 24 h</div>
-    <div id="conv"></div>
-    <div class="sec">Avisos</div>
-    <div id="events"></div>
+    <div class="tabs" id="sideTabs">
+      <button class="tab" data-tab="buys" title="Últimas compras de todos">🟢 Compras</button>
+      <button class="tab" data-tab="conv">🎯 Coincidencias<span class="n" id="convN">0</span></button>
+      <button class="tab" data-tab="ev">🔔 Avisos<span class="n" id="evN">0</span></button>
+      <button class="tab" data-tab="ca" title="Buscar quién compró una moneda por su CA">🔎 CA</button>
+    </div>
+    <div class="pane" data-pane="buys">
+      <div class="filters" id="tfilters"></div>
+      <div id="trades"></div>
+    </div>
+    <div class="pane" data-pane="conv"><div class="sec" id="convSec">Coincidencias · 24 h</div><div id="conv"></div></div>
+    <div class="pane" data-pane="ev"><div id="events"></div></div>
+    <div class="pane" data-pane="ca">
+      <form class="caform" id="caForm"><input id="caIn" placeholder="Pega el CA de una moneda…" autocomplete="off" spellcheck="false"><button>Buscar</button></form>
+      <div class="cahist" id="caHist"></div>
+      <div id="caOut"><div class="muted">Busca en todo el historial de las wallets de cada persona (y de su red) quién compró esa moneda, cuánto, cuándo y si todavía la tiene.</div></div>
+    </div>
   </section>
 </div>
 <script>
@@ -249,8 +425,8 @@ const hue = (a) => { let h = 0; for (const c of a) h = (h * 31 + c.charCodeAt(0)
 const avatarBg = (s) => `linear-gradient(135deg, hsl(${hue(s)} 70% 62%), hsl(${(hue(s) + 60) % 360} 70% 52%))`;
 const solscan = (a) => `https://solscan.io/account/${a}`;
 
-const COLORS = { active: '#3ddc97', current: '#3ddc97', buyer: '#3ddc97', also: '#34c6c6', watch: '#ffb84d', bridge: '#b18cff', busy: '#3a404a', cex: '#ff8fb1', old: '#5b6573', funder: '#6ab0ff', scanning: '#e8eaee', seen: '#8a93a0', pending: '#4a515c' };
-const LABEL = { active: 'Activa', current: 'Revisando', buyer: 'Compró tras recibir', also: 'También compra', watch: 'Vigilar', bridge: 'Puente', busy: 'Exchange / bot', cex: 'Posible vía exchange', old: 'Anterior', funder: 'Le mandó dinero', scanning: 'Revisando', seen: 'Revisada', pending: 'En cola' };
+const COLORS = { active: '#3ddc97', current: '#3ddc97', buyer: '#3ddc97', also: '#34c6c6', watch: '#ffb84d', bridge: '#b18cff', other: '#8a93a0', service: '#3a404a', busy: '#3a404a', cex: '#ff8fb1', old: '#5b6573', funder: '#6ab0ff', scanning: '#e8eaee', seen: '#8a93a0', pending: '#4a515c' };
+const LABEL = { active: 'Activa', current: 'Revisando', buyer: 'Compró tras recibir', also: 'También compra', watch: 'Vigilar', bridge: 'Puente', other: 'Otra persona (ya tradeaba)', service: 'Depósito / servicio', busy: 'Exchange / bot', cex: 'Posible vía exchange', old: 'Anterior', funder: 'Le mandó dinero', scanning: 'Revisando', seen: 'Revisada', pending: 'En cola' };
 
 let D = { people: [], state: {}, events: [] };
 let selected = null;      // persona seleccionada
@@ -277,7 +453,8 @@ async function copyAddr(addr, what = 'Wallet copiada') {
 async function load() {
   D = await fetch('/api/state').then((r) => r.json());
   if (!selected || !D.people.find((p) => p.name === selected)) selected = D.people[0]?.name || null;
-  renderPeople(); renderEvents(); renderConv(); renderStatus(D.running); renderCompare();
+  if (!D.people.length) $('#addwrap').hidden = false;
+  renderPeople(); renderPbar(); renderEvents(); renderConv(); renderTrades(); renderTerm(); renderCounts(); renderStatus(D.running); renderCompare();
   if (liveFor !== selected) drawGraph(graphFor(selected), false);
   renderProfile();
 }
@@ -295,8 +472,9 @@ function graphFor(name) {
 // ---------- Lista de personas ----------
 function renderPeople() {
   const q = $('#q').value.trim().toLowerCase();
-  const list = D.people.filter((p) => !q || p.name.toLowerCase().includes(q) || p.wallets.some((w) => w.toLowerCase().includes(q)) ||
+  let list = D.people.filter((p) => !q || p.name.toLowerCase().includes(q) || p.wallets.some((w) => w.toLowerCase().includes(q)) ||
     (D.state[p.name]?.graph?.nodes || []).some((n) => n.id.toLowerCase().includes(q)));
+  if (!list.length && /^[1-9a-z]{32,44}$/.test(q)) list = D.people; // pegaste un CA: la búsqueda va a la pestaña 🔎
   $('#people').innerHTML = list.map((p) => {
     const r = D.state[p.name];
     const fresh = r?.lastBuyTs && Date.now() / 1000 - r.lastBuyTs < 86400 * 2;
@@ -382,7 +560,7 @@ function buildTree(g, person) {
     lt(h);
     const leaves = h.leaves().length;
     colW = Math.max(150, Math.min(270, (sw * 0.86) / (md + 0.6)));
-    H = Math.max(240, Math.min(Math.max(240, sh - 190), leaves * 64));
+    H = Math.max(240, leaves * 58);
     for (const d of h.descendants()) targets.set(d.id, { x: d.depth * colW, y: (d.x - 0.5) * H, depth: d.depth });
     // El camino raíz → activa queda recto en el centro (el "axón" principal); cada capa se desplaza con él.
     const off = [];
@@ -400,13 +578,13 @@ function buildTree(g, person) {
   return { rootId, activeId, spine, spineSet, nodes: [...byId.values()], targets, treeLinks, cross, colW, H, maxDepth: d3.max(h.descendants(), (d) => d.depth) || 0 };
 }
 
-const nodeR = (n, m) => (n.id === m.rootId ? 24 : n.id === m.activeId ? 22 : n.status === 'busy' ? 9 : 11 + Math.min(7, Math.sqrt(n.buys || 0) * 1.6));
+const nodeR = (n, m) => (n.id === m.rootId ? 24 : n.id === m.activeId ? 22 : (n.status === 'busy' || n.status === 'service') ? 9 : 11 + Math.min(7, Math.sqrt(n.buys || 0) * 1.6));
 const nodeColor = (n) => COLORS[n.status] || COLORS.pending;
 function roleText(n, m) {
   const parts = [];
   if (n.id === m.rootId) parts.push('RAÍZ');
   if (n.id === m.activeId) parts.push('ACTIVA');
-  else if (n.id !== m.rootId) parts.push((LABEL[n.status] || '').toUpperCase());
+  else if (n.id !== m.rootId) parts.push((n.owner ? 'De ' + n.owner : LABEL[n.status] || '').toUpperCase());
   if (n.buys) parts.push(`${n.buys} compra${n.buys === 1 ? '' : 's'}`);
   return parts.filter(Boolean).join(' · ');
 }
@@ -507,8 +685,8 @@ function drawGraph(g, live) {
   all.select('.aura').attr('r', (d) => nodeR(d, m) + 10).attr('fill', nodeColor).attr('opacity', (d) => (d.id === m.activeId ? 0.35 : d.id === m.rootId ? 0.18 : 0.12)).attr('filter', 'url(#glow)');
   all.select('.pulse').attr('r', (d) => nodeR(d, m)).attr('fill', 'none').attr('stroke', nodeColor).attr('stroke-width', 2)
     .style('display', (d) => d.status === 'scanning' || d.status === 'current' || d.id === m.activeId ? null : 'none');
-  all.select('.core').transition().duration(400).attr('r', (d) => nodeR(d, m)).attr('fill', (d) => (d.status === 'busy' ? '#1d2229' : nodeColor(d)))
-    .attr('stroke', (d) => (d.status === 'busy' ? '#4a515c' : d3.color(nodeColor(d)).brighter(0.6))).attr('stroke-width', 1.5);
+  all.select('.core').transition().duration(400).attr('r', (d) => nodeR(d, m)).attr('fill', (d) => ((d.status === 'busy' || d.status === 'service') ? '#1d2229' : nodeColor(d)))
+    .attr('stroke', (d) => ((d.status === 'busy' || d.status === 'service') ? '#4a515c' : d3.color(nodeColor(d)).brighter(0.6))).attr('stroke-width', 1.5);
   all.select('.shine').attr('r', (d) => nodeR(d, m));
   all.select('.rootring').attr('r', (d) => nodeR(d, m) + 7).attr('fill', 'none').attr('stroke', '#f3f0ff').attr('stroke-width', 2).attr('stroke-dasharray', '3 4')
     .style('display', (d) => (d.id === m.rootId ? null : 'none'));
@@ -576,7 +754,7 @@ function bounds(m) {
 function fitAll(ms = 600) {
   if (!model) return;
   const [w, h] = size(), b = bounds(model);
-  const top = 120, bottom = 30; // espacio para el título y la ruta
+  const top = 40, bottom = 30; // espacio para las etiquetas de capa
   const k = Math.min(1.25, Math.min(w / (b.x1 - b.x0), (h - top - bottom) / (b.y1 - b.y0)));
   const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
   const t = d3.zoomIdentity.translate(w / 2 - cx * k, top + (h - top - bottom) / 2 - cy * k).scale(k);
@@ -584,12 +762,12 @@ function fitAll(ms = 600) {
 }
 function focusRoot() {
   const [w, h] = size();
-  const t = VIEW === 'neural' ? d3.zoomIdentity.translate(Math.max(110, w * 0.14), h / 2 + 50).scale(1) : d3.zoomIdentity.translate(w / 2, h / 2 + 40).scale(1);
+  const t = VIEW === 'neural' ? d3.zoomIdentity.translate(Math.max(110, w * 0.14), h / 2).scale(1) : d3.zoomIdentity.translate(w / 2, h / 2).scale(1);
   svg.transition().duration(600).call(zoom.transform, t);
 }
 function keepInView(m) {
   const t = d3.zoomTransform(svg.node()), [w, h] = size();
-  const out = [...m.targets.values()].some((p) => { const x = t.applyX(p.x), y = t.applyY(p.y); return x < 40 || x > w - 40 || y < 110 || y > h - 30; });
+  const out = [...m.targets.values()].some((p) => { const x = t.applyX(p.x), y = t.applyY(p.y); return x < 40 || x > w - 40 || y < 30 || y > h - 30; });
   if (out) fitAll(700);
 }
 
@@ -630,15 +808,16 @@ function fire(id, color = '#e8f6ff', big = false) {
   g.append('circle').attr('class', 'spark').attr('r', r).attr('fill', 'none').attr('stroke', color).attr('stroke-width', big ? 4 : 2.5).style('opacity', 0.95)
     .transition().duration(big ? 1100 : 750).ease(d3.easeCubicOut).attr('r', r * (big ? 3.4 : 2.4)).style('opacity', 0).remove();
   g.select('.core').interrupt('flash').transition('flash').duration(120).attr('fill', '#ffffff')
-    .transition('flash').duration(500).attr('fill', (d) => (d.status === 'busy' ? '#1d2229' : nodeColor(d)));
+    .transition('flash').duration(500).attr('fill', (d) => ((d.status === 'busy' || d.status === 'service') ? '#1d2229' : nodeColor(d)));
 }
 function signal(from, to, color = '#b9ffe0') {
   const path = gLinks.selectAll('g.syn').filter((d) => (d.from === from && d.to === to) || (d.from === to && d.to === from)).select('path.base').node();
-  if (!path) { fire(to, color); return; }
+  if (!path || !path.getAttribute('d')) { fire(to, color); return; }
   const forward = d3.select(path.parentNode).datum();
   const reverse = forward.e.kind === 'in' ? forward.from !== to : forward.from !== from;
   const dot = gFx.append('circle').attr('r', 4.5).attr('fill', color).attr('filter', 'url(#soft)');
   dot.transition().duration(650).ease(d3.easeCubicInOut).tween('move', () => (k) => {
+    if (!path.isConnected || !path.getAttribute('d')) return;
     const L = path.getTotalLength();
     const pt = path.getPointAtLength((reverse ? 1 - k : k) * L);
     dot.attr('cx', pt.x).attr('cy', pt.y);
@@ -669,8 +848,11 @@ const cnt = (w) => (w.atLeast ? '≥' : '') + w.buys;
 
 function renderCompare() {
   const c = D.state[selected]?.compare;
-  $('#cmp').style.display = c && c.wallets.length ? '' : 'none';
-  if (!c || !c.wallets.length) return;
+  const has = c && c.wallets.length;
+  $('#cmpBody').style.display = has ? '' : 'none';
+  $('#cmpEmpty').style.display = has ? 'none' : '';
+  $('#cmpEmpty').textContent = selected ? `${selected} todavía no tiene compras en más de una wallet para comparar.` : 'Elige a alguien.';
+  if (!has || mainTab !== 'cmp') return;
   $('#verdict').innerHTML = `${esc(c.summary)}<small>${c.lines.map(esc).join('<br>')}</small>`;
   $('#wcards').innerHTML = c.wallets.map((w) => {
     const col = walletColor(w.address);
@@ -712,37 +894,263 @@ $('#tl').addEventListener('mouseleave', () => ($('#tip').style.display = 'none')
 $('#tl').addEventListener('click', (e) => { const d = e.target.dataset?.tip; if (d) window.open('https://solscan.io/tx/' + JSON.parse(d).sig, '_blank', 'noopener'); });
 $('#range').addEventListener('click', (e) => { const r = e.target.dataset.r; if (!r) return; range = +r; $('#range').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === e.target)); renderCompare(); });
 
-// ---------- Perfil ----------
+// ---------- Tarjeta de la wallet seleccionada (encima del mapa) ----------
 function renderProfile() {
+  const card = $('#wcard');
   const r = D.state[selected];
   const g = graphFor(selected);
-  const id = selNode || r?.active || D.people.find((p) => p.name === selected)?.active;
-  if (!id) { $('#profile').innerHTML = '<div class="muted">Toca una wallet de la red para ver su detalle.</div>'; return; }
+  const id = selNode;
+  if (!id || !selected) { card.hidden = true; return; }
   const n = g?.nodes.find((x) => x.id === id) || { id, status: 'old' };
   const isActive = r && id === r.active;
   const st = isActive ? 'active' : n.status;
   const ins = (g?.edges || []).filter((e) => e.to === id && (e.sol || e.usd));
   const outs = (g?.edges || []).filter((e) => e.from === id && (e.sol || e.usd));
-  let html = `<div class="card"><span class="st" style="--c:${COLORS[st] || COLORS.pending}">${LABEL[st] || st}${isActive ? ' · ' + esc(selected) : ''}</span>
+  const nBuys = (r?.recent || []).filter((t) => t.side === 'buy' && (t.wallet || r.active) === id).length;
+  card.hidden = false;
+  card.innerHTML = `<button class="x" data-wclose title="Cerrar">×</button><div class="card"><span class="st" style="--c:${COLORS[st] || COLORS.pending}">${LABEL[st] || st}${n.owner ? " · es de " + esc(n.owner) : ""}${isActive ? ' · ' + esc(selected) : ''}</span>
     <span class="addr" data-copy="${esc(id)}" title="Click para copiar">${esc(id)}</span>
     <div class="row"><div class="stat"><b>${n.buys ?? '—'}</b><span>compras</span></div><div class="stat"><b>${n.sells ?? '—'}</b><span>ventas</span></div>
     <div class="stat"><b style="font-size:13px">${ago(n.lastBuyTs)}</b><span>última compra</span></div></div>
     ${ins.map((e) => `<div class="muted" style="padding:8px 0 0">← recibió ${money(e.sol, e.usd)} de <a href="#" data-node="${esc(e.from)}" data-copy="${esc(e.from)}">${short(e.from)}</a> ${e.ts ? ago(e.ts) : ''}</div>`).join('')}
     ${outs.map((e) => `<div class="muted" style="padding:8px 0 0">→ envió ${money(e.sol, e.usd)} a <a href="#" data-node="${esc(e.to)}" data-copy="${esc(e.to)}">${short(e.to)}</a> ${e.ts ? ago(e.ts) : ''}</div>`).join('')}
     <div class="links"><a href="${solscan(id)}" target="_blank" rel="noopener">Solscan</a><a href="https://gmgn.ai/sol/address/${esc(id)}" target="_blank" rel="noopener">GMGN</a>
-    <a href="#" data-copy="${esc(id)}">Copiar</a></div></div>`;
-  const mine = (r?.recent || []).filter((t) => isActive || (t.wallet || r.active) === id);
-  if (mine.length) {
-    html += `<div class="sec">Compras y ventas recientes${isActive ? ' (todas sus wallets)' : ''}</div>` + mine.slice(0, 20).map((t) => {
-      const tk = r.tokens?.[t.mint] || {};
-      return `<div class="trade"><span class="s ${t.side}">${t.side === 'buy' ? 'Compra' : 'Venta'}</span>
-        <span><a class="tok" href="https://dexscreener.com/solana/${esc(t.mint)}" target="_blank" rel="noopener">${esc(tk.symbol || short(t.mint))}</a>${tk.spoof ? ` <span class="spoof" title="Usa el nombre de ${esc(tk.spoof)} pero no es el token real">⚠ imitación de ${esc(tk.spoof)}</span>` : ''} <span class="wtag" style="--c:${walletColor(t.wallet || r.active)}" data-copy="${esc(t.wallet || r.active)}">${short(t.wallet || r.active)}</span></span>
-        <span class="m">${money(t.sol, t.usd)}<br><a href="https://solscan.io/tx/${esc(t.sig)}" target="_blank" rel="noopener">${clock(t.ts)}</a></span></div>`;
-    }).join('');
-  } else html += '<div class="muted">Sin compras ni ventas en sus últimas transacciones.</div>';
-  html += selected ? `<div class="row" style="margin:4px 14px 14px"><button class="ghost" data-check="${esc(selected)}">Revisar ${esc(selected)}</button><button class="ghost" data-del="${esc(selected)}">Dejar de seguir</button></div>` : '';
-  $('#profile').innerHTML = html;
+    <a href="#" data-copy="${esc(id)}">Copiar</a></div></div>
+    ${nBuys ? `<button class="ghost more" data-wbuys="${esc(id)}">Ver sus compras recientes →</button>` : ''}`;
 }
+
+// ---------- Barra de la persona: lo importante de un vistazo ----------
+function renderPbar() {
+  const p = D.people.find((x) => x.name === selected);
+  const r = D.state[selected];
+  $('#pbar').style.display = p ? '' : 'none';
+  if (!p) return;
+  $('#pav').style.background = avatarBg(p.name);
+  $('#pav').textContent = p.name[0]?.toUpperCase() || '';
+  $('#pacts').innerHTML = `<button class="ghost" data-check="${esc(p.name)}">↻ Revisar</button><button class="ghost" data-del="${esc(p.name)}">Dejar de seguir</button>`;
+  const now = Date.now() / 1000;
+  const c = r?.compare;
+  let b24 = 0, sol24 = 0, usd24 = 0;
+  if (c?.wallets?.length) for (const w of c.wallets) { b24 += w.w24.buys; sol24 += w.w24.sol || 0; usd24 += w.w24.usd || 0; }
+  else for (const t of r?.recent || []) if (t.side === 'buy' && t.ts >= now - 86400) { b24++; sol24 += t.sol || 0; usd24 += t.usd || 0; }
+  const active = r?.active || p.active;
+  $('#kpis').innerHTML = `
+    <div class="kpi"><span>Wallet activa</span><b class="mono" data-copy="${esc(active)}" title="Click para copiar">${short(active)}</b><small>${r?.changed ? '🔁 cambió hace poco' : `${p.wallets.length} wallet${p.wallets.length > 1 ? 's' : ''} conocidas`}</small></div>
+    <div class="kpi"><span>Última compra</span><b>${r?.lastBuyTs ? ago(r.lastBuyTs) : '—'}</b><small>${r?.lastBuyTs ? clock(r.lastBuyTs) : 'sin compras'}</small></div>
+    <div class="kpi"><span>Compras 24 h</span><b>${r ? b24 : '—'}</b><small>${c?.wallets ? `${c.wallets.filter((w) => w.w24.buys).length} wallet(s) comprando` : '&nbsp;'}</small></div>
+    <div class="kpi"><span>Volumen 24 h</span><b>${r && (sol24 || usd24) ? money(sol24, usd24) : '—'}</b><small>en compras</small></div>`;
+}
+
+// ---------- Últimas compras de todos ----------
+const tf = { who: 'all', side: 'buy', wallet: null };
+const freshKeys = new Set();
+function allTrades() {
+  const out = [], seen = new Set();
+  for (const [name, r] of Object.entries(D.state)) {
+    for (const t of r.recent || []) {
+      const k = t.sig + t.mint + name;
+      if (seen.has(k)) continue; seen.add(k);
+      out.push({ ...t, name, wallet: t.wallet || r.active, tk: r.tokens?.[t.mint] || {} });
+    }
+  }
+  return out.sort((a, b) => b.ts - a.ts);
+}
+const dayLabel = (ts) => { const d = new Date(ts * 1000), s = d.toDateString();
+  return s === new Date().toDateString() ? 'Hoy' : s === new Date(Date.now() - 86400000).toDateString() ? 'Ayer' : d.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short' }); };
+function renderTrades() {
+  if (tf.who === 'person' && !selected) tf.who = 'all';
+  const seg = (key, opts) => `<div class="seg">${opts.map(([v, l]) => `<button data-tf="${key}:${v}" class="${tf[key] === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`;
+  $('#tfilters').innerHTML = seg('who', [['all', 'Todos'], ...(selected ? [['person', selected]] : [])]) + seg('side', [['buy', 'Compras'], ['all', 'Compras y ventas']])
+    + (tf.wallet ? `<span class="fchip">wallet <code>${short(tf.wallet)}</code><button data-tf="wallet:" title="Quitar filtro">×</button></span>` : '');
+  let list = allTrades();
+  if (tf.side === 'buy') list = list.filter((t) => t.side === 'buy');
+  if (tf.who === 'person') list = list.filter((t) => t.name === selected);
+  if (tf.wallet) list = list.filter((t) => t.wallet === tf.wallet);
+  list = list.slice(0, 150);
+  if (!list.length) { $('#trades').innerHTML = `<div class="muted" style="padding:14px">${D.people.length ? 'Sin compras con este filtro todavía.' : 'Sigue a alguien para ver sus compras aquí.'}</div>`; return; }
+  let html = '', day = '';
+  for (const t of list) {
+    const dl = dayLabel(t.ts);
+    if (dl !== day) { day = dl; html += `<div class="day">${esc(dl)}</div>`; }
+    const sym = t.tk.symbol || short(t.mint);
+    html += `<div class="tr${freshKeys.has(t.sig + t.mint) ? ' new' : ''}">
+      <div class="av" style="background:${avatarBg(t.name)}" title="${esc(t.name)}">${esc(t.name[0]?.toUpperCase())}</div>
+      <div style="min-width:0"><div><span class="${t.side === 'buy' ? 'side-b' : 'side-s'}">${t.side === 'buy' ? '▲' : '▼'}</span> <a class="tok" href="https://dexscreener.com/solana/${esc(t.mint)}" target="_blank" rel="noopener">${esc(sym)}</a>${t.tk.spoof || t.spoof ? ` <span class="spoof">⚠ imitación</span>` : ''}</div>
+        <div class="sub"><a href="#" data-person="${esc(t.name)}">${esc(t.name)}</a><span class="wtag" style="--c:${t.name === selected ? walletColor(t.wallet) : '#8a93a0'}" data-copy="${esc(t.wallet)}" title="Copiar wallet">${short(t.wallet)}</span>${t.tk.mcap ? `<span>mcap $${fmtBig(t.tk.mcap)}</span>` : ''}</div></div>
+      <div class="amt2">${money(t.sol, t.usd) || '—'}<small><a href="https://solscan.io/tx/${esc(t.sig)}" target="_blank" rel="noopener" title="Ver transacción">${new Date(t.ts * 1000).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })} · ${ago(t.ts)}</a></small></div></div>`;
+  }
+  $('#trades').innerHTML = html;
+}
+
+// ---------- Terminal: compras (CA de la moneda) y movimientos de wallet, lo nuevo arriba ----------
+const tt = { who: 'all', kind: 'all', min: false };
+(() => {
+  let h = 190;
+  try { h = +localStorage.getItem('rastro.termH') || 190; } catch { /* sin almacenamiento */ }
+  const apply = (v) => { h = Math.max(110, Math.min(window.innerHeight * 0.6, v)); $('#term').style.height = h + 'px'; };
+  apply(h);
+  $('#tgrip').addEventListener('pointerdown', (e) => {
+    if (tt.min) return;
+    e.preventDefault();
+    const y0 = e.clientY, h0 = $('#term').getBoundingClientRect().height;
+    document.body.classList.add('resizing');
+    const move = (ev) => apply(h0 + (y0 - ev.clientY));
+    const up = () => {
+      document.body.classList.remove('resizing');
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      try { localStorage.setItem('rastro.termH', String(Math.round(h))); } catch { /* sin almacenamiento */ }
+      if (model) fitAll(300);
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  });
+})();
+try { const v = JSON.parse(localStorage.getItem('rastro.term') || '{}'); tt.who = v.who || 'all'; tt.kind = v.kind || 'all'; tt.min = !!v.min; } catch { /* sin almacenamiento */ }
+let tPaused = false, tTopKey = null, tHidden = 0;
+const stamp = (ts) => { const d = new Date(ts * 1000); const p2 = (x) => String(x).padStart(2, '0');
+  return `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+
+// Movimientos de dinero entre wallets: envíos que salen, dinero que entra y cambios de wallet.
+function allMoves() {
+  const byKey = new Map();
+  const put = (m) => {
+    if (!m.from || !m.to || !m.ts) return;
+    const k = m.type + m.from + m.to;
+    const o = byKey.get(k);
+    if (!o || m.ts > o.ts) byKey.set(k, { ...o, ...m });
+  };
+  for (const [name, r] of Object.entries(D.state)) {
+    for (const e of r.graph?.edges || []) {
+      if (!(e.sol || e.usd) || !e.ts) continue;
+      put({ type: e.kind === 'in' ? 'in' : 'out', name, from: e.from, to: e.to, sol: e.sol, usd: e.usd, ts: e.ts, cex: e.kind === 'cex' });
+    }
+    for (const o of r.outgoing || []) put({ type: 'out', name, from: r.active, to: o.to, sol: o.sol, usd: o.usd, ts: o.lastTs, sig: o.sigs?.[0] });
+    for (const f of r.fundedBy || []) put({ type: 'in', name, from: f.from, to: r.active, sol: f.asset === 'SOL' ? f.amount : 0, usd: f.asset === 'SOL' ? 0 : f.amount, ts: f.ts, sig: f.sig });
+  }
+  for (const e of D.events) {
+    if (e.type === 'move') put({ type: 'out', name: e.name, from: e.from, to: e.to, sol: e.asset === 'SOL' ? e.amount : 0, usd: e.asset === 'SOL' ? 0 : e.amount, ts: e.at, sig: e.sig, live: true });
+    if (e.type === 'switch') put({ type: 'switch', name: e.name, from: e.from, to: e.to, ts: e.at });
+  }
+  return [...byKey.values()];
+}
+
+function termRows() {
+  const conv = new Set((D.convergences || []).map((c) => c.mint));
+  const rows = allTrades().map((t) => ({ ...t, type: t.side, key: 'c' + t.sig + t.mint, conv: conv.has(t.mint) }));
+  for (const m of allMoves()) rows.push({ ...m, key: 'w' + m.type + m.from + m.to + m.ts });
+  rows.sort((a, b) => b.ts - a.ts);
+  const q = $('#tq').value.trim().toLowerCase().replace(/^\$/, '');
+  return rows.filter((r) => {
+    if (tt.who === 'person' && r.name !== selected) return false;
+    const coin = r.type === 'buy' || r.type === 'sell';
+    if (tt.kind === 'coins' && !coin) return false;
+    if (tt.kind === 'buys' && r.type !== 'buy') return false;
+    if (tt.kind === 'wallets' && coin) return false;
+    if (q) {
+      const hay = coin ? [r.name, r.wallet, r.mint, r.tk?.symbol] : [r.name, r.from, r.to];
+      if (!hay.some((h) => String(h || '').toLowerCase().includes(q))) return false;
+    }
+    return true;
+  }).slice(0, 400);
+}
+
+function termLine(r) {
+  const fresh = freshKeys.has(r.sig + r.mint) || freshKeys.has(r.key) ? ' new' : '';
+  const amount = esc(money(r.sol, r.usd) || '—');
+  if (r.type === 'buy' || r.type === 'sell') {
+    const sym = r.tk.symbol || '???';
+    const fake = r.tk.spoof || r.spoof;
+    return `<div class="tl1 ${r.type}${fresh}" data-copy="${esc(r.mint)}" data-what="CA copiado" title="Click: copiar el CA de ${esc(sym)}">
+      <span class="t">${stamp(r.ts)}</span><span class="ty">${r.type === 'buy' ? 'BUY' : 'SELL'}</span>
+      <span class="n">${esc(r.name)}</span><span class="w">${short(r.wallet)}</span><span class="a">${amount}</span>
+      <span class="k">${fake ? '<span class="x">⚠FALSO</span> ' : ''}${r.conv ? '<span class="cv" title="Varias personas compraron esta moneda">🎯</span>' : ''}$${esc(sym)}</span>
+      <span class="ca"><i>CA </i>${esc(r.mint)}</span>
+      <span class="lk"><a data-ca="${esc(r.mint)}" title="¿Quién más compró esta moneda?">🔎</a><a href="https://dexscreener.com/solana/${esc(r.mint)}" target="_blank" rel="noopener">dex</a><a href="https://solscan.io/tx/${esc(r.sig)}" target="_blank" rel="noopener">tx</a></span></div>`;
+  }
+  // Movimiento de wallet: se copia la otra wallet (destino del envío, o quien mandó el dinero).
+  const label = { out: 'MOVE', in: 'IN', switch: 'SWITCH' }[r.type];
+  const mine = r.type === 'in' ? r.to : r.from;
+  const other = r.type === 'in' ? r.from : r.to;
+  const tag = { out: r.cex ? 'vía exchange' : 'envió →', in: '← recibió de', switch: 'nueva activa →' }[r.type];
+  return `<div class="tl1 ${r.type}${fresh}" data-copy="${esc(other)}" data-what="Wallet copiada" title="Click: copiar la wallet ${short(other)}">
+    <span class="t">${stamp(r.ts)}</span><span class="ty">${label}</span>
+    <span class="n">${esc(r.name)}</span><span class="w">${short(mine)}</span><span class="a">${r.type === 'switch' ? '' : amount}</span>
+    <span class="k wl">${tag}${r.live ? ' ⚡' : ''}</span>
+    <span class="ca"><i>${r.type === 'in' ? 'DE ' : 'A '}</i>${esc(other)}</span>
+    <span class="lk"><a href="${solscan(other)}" target="_blank" rel="noopener">wallet</a>${r.sig ? `<a href="https://solscan.io/tx/${esc(r.sig)}" target="_blank" rel="noopener">tx</a>` : ''}</span></div>`;
+}
+
+function renderTerm() {
+  if (tt.who === 'person' && !selected) tt.who = 'all';
+  const seg = (key, opts) => opts.map(([v, l]) => `<button data-tt="${key}:${v}" class="${tt[key] === v ? 'on' : ''}">${esc(l)}</button>`).join('');
+  $('#tkind').innerHTML = seg('kind', [['all', 'todo'], ['buys', 'compras'], ['coins', '+ventas'], ['wallets', 'wallets']]);
+  $('#twho').innerHTML = seg('who', [['all', 'todos'], ...(selected ? [['person', selected.toLowerCase()]] : [])]);
+  $('#term').classList.toggle('min', tt.min);
+  let th = 190; try { th = +localStorage.getItem('rastro.termH') || 190; } catch { /* sin almacenamiento */ }
+  $('#term').style.height = tt.min ? 'auto' : th + 'px';
+  $('#tmin').textContent = tt.min ? '▴ abrir' : '▾';
+  $('#tpause').classList.toggle('on', tPaused);
+  $('#tpause').textContent = tPaused ? '▶ reanudar' : '⏸';
+  if (tPaused) return;
+  const rows = termRows();
+  $('#tcount').textContent = `${rows.length} línea${rows.length === 1 ? '' : 's'}`;
+  const body = $('#tbody');
+  const scrolled = body.scrollTop > 30;
+  // Cuántas líneas nuevas entraron arriba desde la última vez.
+  const newCount = tTopKey ? rows.findIndex((r) => r.key === tTopKey) : 0;
+  const prevTop = body.scrollTop, prevH = body.scrollHeight;
+  body.innerHTML = `<div class="tprompt"><b>rastro@solana</b> ~ esperando movimientos en tiempo real${D.realtime?.connected ? ' ⚡' : '…'}</div>`
+    + (rows.length ? rows.map(termLine).join('') : '<div class="tprompt">sin líneas con este filtro…</div>');
+  tTopKey = rows[0]?.key || null;
+  if (scrolled) {
+    // Si estás leyendo más abajo, no te mueve: conserva lo que estabas viendo y avisa que hay nuevas.
+    body.scrollTop = prevTop + (body.scrollHeight - prevH);
+    if (newCount > 0) tHidden += newCount;
+  } else { body.scrollTop = 0; tHidden = 0; }
+  $('#tnew').hidden = !tHidden;
+  $('#tnew').textContent = `↑ ${tHidden} nueva${tHidden === 1 ? '' : 's'}`;
+}
+$('#term .thead').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tt]');
+  if (b) { const [k, v] = b.dataset.tt.split(':'); tt[k] = v; tTopKey = null; }
+  else if (e.target.closest('#tmin')) tt.min = !tt.min;
+  else if (e.target.closest('#tpause')) tPaused = !tPaused;
+  else return;
+  try { localStorage.setItem('rastro.term', JSON.stringify(tt)); } catch { /* sin almacenamiento */ }
+  renderTerm();
+  if (model) fitAll(0);
+});
+$('#tq').addEventListener('input', () => { tTopKey = null; renderTerm(); });
+$('#tbody').addEventListener('scroll', () => { if ($('#tbody').scrollTop < 30 && tHidden) { tHidden = 0; $('#tnew').hidden = true; } });
+$('#tnew').addEventListener('click', () => { $('#tbody').scrollTo({ top: 0, behavior: 'smooth' }); tHidden = 0; $('#tnew').hidden = true; });
+
+// ---------- Pestañas ----------
+let mainTab = 'map', sideTab = 'buys', evSeenAt = 0;
+try { mainTab = localStorage.getItem('rastro.main') || 'map'; sideTab = localStorage.getItem('rastro.side') || 'buys'; evSeenAt = +localStorage.getItem('rastro.evSeen') || 0; } catch { /* sin almacenamiento */ }
+const save = (k, v) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
+function setMainTab(t) {
+  mainTab = t; save('rastro.main', t);
+  document.querySelectorAll('#mainTabs .tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+  document.querySelectorAll('.body > section').forEach((s) => s.classList.toggle('on', s.dataset.pane === t));
+  $('#mapTools').style.visibility = t === 'map' ? '' : 'hidden';
+  if (t === 'cmp') renderCompare();
+  if (t === 'map' && selected) { mapKey = null; drawGraph(graphFor(selected), liveFor === selected); }
+}
+function setSideTab(t) {
+  sideTab = t; save('rastro.side', t);
+  document.querySelectorAll('#sideTabs .tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+  document.querySelectorAll('.side .pane').forEach((s) => s.classList.toggle('on', s.dataset.pane === t));
+  if (t === 'ev') { evSeenAt = Math.floor(Date.now() / 1000); save('rastro.evSeen', evSeenAt); }
+  renderCounts();
+}
+function renderCounts() {
+  const conv = (D.convergences || []).length, hot = (D.convergences || []).some((c) => Date.now() / 1000 - c.lastTs < 3600);
+  $('#convN').textContent = conv; $('#convN').className = 'n' + (hot ? ' hot' : '');
+  const unread = sideTab === 'ev' ? 0 : D.events.filter((e) => (e.at || 0) > evSeenAt).length;
+  $('#evN').textContent = unread; $('#evN').className = 'n' + (unread ? ' hot' : '');
+  $('#peopleSec').textContent = `Siguiendo · ${D.people.length}`;
+}
+$('#mainTabs').addEventListener('click', (e) => { const t = e.target.closest('.tab')?.dataset.tab; if (t) setMainTab(t); });
+$('#sideTabs').addEventListener('click', (e) => { const t = e.target.closest('.tab')?.dataset.tab; if (t) setSideTab(t); });
 
 // ---------- Avisos y estado ----------
 function eventHtml(e) {
@@ -787,7 +1195,8 @@ function feed(html, cls = '') {
   const el = document.createElement('div');
   el.className = 'fi ' + cls; el.innerHTML = html;
   $('#feed').prepend(el);
-  while ($('#feed').children.length > 9) $('#feed').lastChild.remove();
+  while ($('#feed').children.length > 5) $('#feed').lastChild.remove();
+  clearTimeout(feed.hide); $('#feed').style.opacity = 1;
 }
 function liveNode(id, patch) {
   let n = liveGraph.nodes.find((x) => x.id === id);
@@ -800,13 +1209,28 @@ function redrawLive() { if (redrawTimer) return; redrawTimer = setTimeout(() => 
 
 function onLive(e) {
   if (e.t === 'alert') {
-    D.events.unshift(e.event); D.events.splice(100); renderEvents();
+    D.events.unshift(e.event); D.events.splice(300); renderEvents();
     const ev = e.event;
+    if (ev.type === 'buy' && D.state[ev.name]) {
+      // La compra entra a "Últimas compras" al instante, sin esperar la revisión completa.
+      const r = D.state[ev.name];
+      r.recent = r.recent || [];
+      if (!r.recent.some((t) => t.sig === ev.trade.sig && t.mint === ev.trade.mint)) r.recent.unshift({ ...ev.trade, side: 'buy', wallet: ev.wallet });
+      if (ev.symbol) { r.tokens = r.tokens || {}; r.tokens[ev.trade.mint] = r.tokens[ev.trade.mint] || { symbol: ev.symbol }; }
+      freshKeys.add(ev.trade.sig + ev.trade.mint); setTimeout(() => freshKeys.delete(ev.trade.sig + ev.trade.mint), 3000);
+      renderTrades(); renderTerm(); if (ev.name === selected) renderPbar();
+    }
+    renderCounts();
     if (ev.type === 'buy') feed(`⚡ <b>${esc(ev.name)}</b> compró ${esc(ev.symbol || short(ev.trade.mint))} · ${money(ev.trade.sol, ev.trade.usd)}`, 'good');
     if (ev.type === 'convergence') {
       feed(`🎯 <b>${ev.people.length} personas</b> compraron ${esc(ev.symbol || short(ev.mint))} en ${spanTxt(ev.spanSec)}`, 'warn');
-      D.convergences = [ev, ...(D.convergences || []).filter((c) => c.mint !== ev.mint)]; renderConv();
+      D.convergences = [ev, ...(D.convergences || []).filter((c) => c.mint !== ev.mint)]; renderConv(); renderCounts();
       for (const p of ev.people) if (p.name === selected) fire(p.wallet, '#ffb84d', true);
+    }
+    if (ev.type === 'move' || ev.type === 'switch') {
+      const k = 'w' + (ev.type === 'move' ? 'out' : 'switch') + ev.from + ev.to + ev.at;
+      freshKeys.add(k); setTimeout(() => freshKeys.delete(k), 3000);
+      renderTerm();
     }
     if (ev.type === 'move') feed(`💸 <b>${esc(ev.name)}</b> mandó ${fmt(ev.amount)} ${esc(ev.asset)} a <code>${short(ev.to)}</code>`, 'warn');
     // La neurona de esa wallet se dispara en el mapa (si estás viendo a esa persona).
@@ -817,7 +1241,11 @@ function onLive(e) {
     return;
   }
   if (e.t === 'rt') { fetch('/api/state').then((r) => r.json()).then((d) => { D.realtime = d.realtime; renderStatus(D.running); }); return; }
-  if (e.t === 'run') { D.running = e.running; renderStatus(e.running); if (!e.running) { liveFor = null; liveGraph = null; load(); } return; }
+  if (e.t === 'run') {
+    D.running = e.running; renderStatus(e.running);
+    if (!e.running) { liveFor = null; liveGraph = null; load(); clearTimeout(feed.hide); feed.hide = setTimeout(() => { $('#feed').style.opacity = 0; }, 5000); }
+    return;
+  }
   if (e.t === 'start') {
     liveFor = e.person;
     liveGraph = { nodes: e.wallets.map((w) => ({ id: w, status: 'old' })), edges: e.wallets.slice(1).map((w, i) => ({ from: e.wallets[i], to: w, kind: 'history' })) };
@@ -825,7 +1253,7 @@ function onLive(e) {
     if (Date.now() - userPickedAt > 20000) { selected = e.person; selNode = null; }
     $('#feed').innerHTML = '';
     feed(`🔎 Buscando a <b>${esc(e.person)}</b>`);
-    renderPeople(); renderStatus(true); redrawLive();
+    renderPeople(); renderPbar(); renderStatus(true); redrawLive();
     return;
   }
   if (!liveGraph || e.person !== liveFor) return;
@@ -862,11 +1290,87 @@ const es = new EventSource('/api/stream');
 es.onmessage = (m) => onLive(JSON.parse(m.data));
 
 // ---------- Interacción ----------
+// ---------- Búsqueda por CA ----------
+const isAddr = (a) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a);
+let caHist = [];
+try { caHist = JSON.parse(localStorage.getItem('rastro.caHist') || '[]'); } catch { /* sin almacenamiento */ }
+let caSeq = 0;
+const ROLE = { active: ['Activa', '#3ddc97'], old: ['Anterior', '#5b6573'] };
+const amt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : n >= 1 ? n.toFixed(0) : n.toPrecision(2));
+function renderCaHist() {
+  $('#caHist').innerHTML = caHist.map((h) => `<button data-ca="${esc(h.mint)}" title="${esc(h.mint)}">${esc(h.symbol || short(h.mint))}${h.n ? ' · ' + h.n : ''}</button>`).join('');
+}
+function caHitHtml(h) {
+  const [rl, rc] = ROLE[h.role] || [LABEL[h.role] || h.role, COLORS[h.role] || '#8a93a0'];
+  const al = h.partial ? 'al menos ' : '';
+  const hold = h.holding > 0 ? `<b class="hold">le quedan ${amt(h.holding)}</b>` : `<b class="gone">ya no tiene</b>`;
+  const trs = h.trades.map((t) => `<div><span class="${t.side === 'buy' ? 'b' : 's'}">${t.side === 'buy' ? 'BUY ' : 'SELL'}</span><span>${esc(money(t.sol, t.usd) || '—')}</span><span>${clock(t.ts)}</span><a href="https://solscan.io/tx/${esc(t.sig)}" target="_blank" rel="noopener">tx</a></div>`).join('');
+  return `<div class="cahit">
+    <div class="top"><div class="av" style="background:${avatarBg(h.person)}">${esc(h.person[0]?.toUpperCase())}</div>
+      <div><div class="who" data-goto="${esc(h.person)}|${esc(h.address)}" title="Ver en el mapa">${esc(h.person)}</div>
+      <div class="wl" data-copy="${esc(h.address)}" title="Copiar wallet">${short(h.address)}</div></div>
+      <span class="rl" style="--c:${rc}">${esc(rl)}</span></div>
+    <div class="nums">
+      <div><span>Compró</span> <b>${al}${h.buys}×</b> ${esc(money(h.solIn, h.usdIn) || '')}</div>
+      <div><span>Vendió</span> <b>${al}${h.sells}×</b> ${esc(money(h.solOut, h.usdOut) || '')}</div>
+      <div><span>Primera</span> <b>${clock(h.firstTs)}</b></div>
+      <div><span>Última</span> <b>${ago(h.lastTs)}</b> · ${hold}</div>
+    </div>
+    ${trs ? `<details><summary>${h.trades.length} movimientos más recientes${h.partial ? ` (de ${h.txCount})` : ''}</summary><div class="trs">${trs}</div></details>` : ''}
+  </div>`;
+}
+async function searchCa(mint) {
+  mint = String(mint || '').trim();
+  if (!isAddr(mint)) { $('#caOut').innerHTML = '<div class="muted">Eso no parece un CA. Pega la dirección completa de la moneda.</div>'; return; }
+  setSideTab('ca');
+  $('#caIn').value = mint;
+  const seq = ++caSeq;
+  $('#caOut').innerHTML = `<div class="muted">Buscando <code>${short(mint)}</code> en las wallets de todos…</div>`;
+  let r;
+  try { r = await fetch('/api/ca?mint=' + encodeURIComponent(mint)).then((x) => x.json()); }
+  catch { r = { error: 'No se pudo conectar con rastro' }; }
+  if (seq !== caSeq) return;
+  if (r.error) {
+    // ¿Pegaste una wallet? Si es de alguien que sigues, te lleva a ella.
+    const owner = r.kind === 'wallet' && D.people.find((p) => p.wallets.includes(mint) || (D.state[p.name]?.graph?.nodes || []).some((n) => n.id === mint));
+    if (owner) { selectPerson(owner.name, mint); setMainTab('map'); }
+    $('#caOut').innerHTML = `<div class="muted">${esc(r.error)}${r.kind === 'wallet' ? (owner ? ` — es de la red de <b>${esc(owner.name)}</b>, te llevé a ella.` : ' y no está en la red de nadie que sigues.') : ''}</div>`;
+    return;
+  }
+  const tk = r.token || {};
+  const sym = tk.symbol || short(mint);
+  const people = [...new Set(r.hits.map((h) => h.person))];
+  const buyers = r.hits.filter((h) => h.buys);
+  caHist = [{ mint, symbol: tk.symbol, n: people.length }, ...caHist.filter((h) => h.mint !== mint)].slice(0, 8);
+  save('rastro.caHist', JSON.stringify(caHist)); renderCaHist();
+  $('#caOut').innerHTML = `
+    <div class="catok"><b>$${esc(sym)}</b> <span class="muted" style="padding:0">${esc(tk.name || '')}</span>
+      <div class="meta">${tk.mcap ? 'mcap ~$' + fmtBig(tk.mcap) : 'sin mercado conocido'}${tk.spoof ? ' · <span class="spoof">⚠ imitación</span>' : ''}
+        <a href="#" data-copy="${esc(mint)}" data-what="CA copiado">copiar CA</a><a href="https://dexscreener.com/solana/${esc(mint)}" target="_blank" rel="noopener">dex</a></div></div>
+    <div class="cahead ${buyers.length ? 'hit' : 'none'}">${buyers.length
+      ? `${people.length === 1 ? 'La compró <b>' + esc(people[0]) + '</b>' : `<b>${people.length} personas</b> la compraron: ${people.map(esc).join(', ')}`} · ${buyers.length} wallet${buyers.length === 1 ? '' : 's'}`
+      : r.hits.length ? 'La movieron, pero nadie la compró' : 'Nadie de los que sigues la ha tocado'}
+      <span class="muted" style="padding:0"> · ${r.searched} wallets revisadas en ${(r.ms / 1000).toFixed(1)} s</span></div>
+    ${r.hits.map(caHitHtml).join('')}`;
+}
+$('#caForm').addEventListener('submit', (e) => { e.preventDefault(); searchCa($('#caIn').value); });
+$('#q').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const q = $('#q').value.trim();
+  const known = D.people.some((p) => p.wallets.includes(q) || (D.state[p.name]?.graph?.nodes || []).some((n) => n.id === q));
+  if (isAddr(q) && !known) searchCa(q);
+});
+renderCaHist();
+
 $('#people').addEventListener('click', (e) => {
   const el = e.target.closest('.person'); if (!el) return;
-  selected = el.dataset.name; selNode = null; userPickedAt = Date.now();
-  renderPeople(); renderCompare(); drawGraph(graphFor(selected), liveFor === selected); renderProfile();
+  selectPerson(el.dataset.name);
 });
+function selectPerson(name, node = null) {
+  selected = name; selNode = node; userPickedAt = Date.now();
+  if (tf.wallet && !node) tf.wallet = null;
+  renderPeople(); renderPbar(); renderCompare(); renderTrades(); renderTerm(); drawGraph(graphFor(selected), liveFor === selected); renderProfile();
+}
 $('#q').addEventListener('input', () => {
   renderPeople();
   const q = $('#q').value.trim();
@@ -874,10 +1378,9 @@ $('#q').addEventListener('input', () => {
     // Si pegas una wallet, salta a la persona y a ese nodo.
     const hit = D.people.find((p) => p.wallets.some((w) => w.includes(q)) || (D.state[p.name]?.graph?.nodes || []).some((n) => n.id.includes(q)));
     if (hit) {
-      selected = hit.name; userPickedAt = Date.now();
-      selNode = [...hit.wallets, ...(D.state[hit.name]?.graph?.nodes || []).map((n) => n.id)].find((w) => w.includes(q)) || null;
-      renderPeople(); drawGraph(graphFor(selected), liveFor === selected); renderProfile();
-    }
+      selectPerson(hit.name, [...hit.wallets, ...(D.state[hit.name]?.graph?.nodes || []).map((n) => n.id)].find((w) => w.includes(q)) || null);
+      setMainTab('map');
+    } else if (isAddr(q)) searchCa(q);
   }
 });
 $('#add').addEventListener('submit', async (ev) => {
@@ -885,22 +1388,35 @@ $('#add').addEventListener('submit', async (ev) => {
   const f = new FormData(ev.target);
   const r = await fetch('/api/people', { method: 'POST', body: JSON.stringify({ name: f.get('name'), wallet: f.get('wallet') }) }).then((r) => r.json());
   $('#err').textContent = r.error || '';
-  if (!r.error) { selected = String(f.get('name')).trim(); userPickedAt = 0; ev.target.reset(); load(); }
+  if (!r.error) { selected = String(f.get('name')).trim(); userPickedAt = 0; ev.target.reset(); $('#addwrap').hidden = true; load(); }
 });
+$('#addBtn').addEventListener('click', () => { const w = $('#addwrap'); w.hidden = !w.hidden; if (!w.hidden) w.querySelector('input').focus(); });
 $('#refresh').addEventListener('click', () => fetch('/api/refresh', { method: 'POST' }));
 document.addEventListener('click', async (e) => {
   const t = e.target;
-  const copyEl = t.closest?.('[data-copy]');
+  const caEl = t.closest?.('[data-ca]');
+  if (caEl) { e.preventDefault(); e.stopPropagation(); searchCa(caEl.dataset.ca); return; }
+  const go = t.closest?.('[data-goto]');
+  if (go) { const [name, w] = go.dataset.goto.split('|'); selectPerson(name, w); setMainTab('map'); return; }
+  const copyEl = t.closest?.('a[target="_blank"]') ? null : t.closest?.('[data-copy]');
   if (copyEl) { e.preventDefault(); e.stopPropagation(); copyAddr(copyEl.dataset.copy, copyEl.dataset.what); }
   const nodeEl = t.closest?.('[data-node]');
   if (nodeEl) { e.preventDefault(); selNode = nodeEl.dataset.node; userPickedAt = Date.now(); renderProfile(); paintSel(); }
   if (copyEl && !nodeEl) return;
+  const tfEl = t.closest?.('[data-tf]');
+  if (tfEl) { const [k, v] = tfEl.dataset.tf.split(':'); tf[k] = v || null; renderTrades(); renderTerm(); return; }
+  const wb = t.closest?.('[data-wbuys]');
+  if (wb) { tf.wallet = wb.dataset.wbuys; tf.who = 'person'; tf.side = 'all'; setSideTab('buys'); renderTrades(); renderTerm(); return; }
+  if (t.closest?.('[data-wclose]')) { selNode = null; renderProfile(); paintSel(); return; }
+  const pe = t.closest?.('[data-person]');
+  if (pe) { e.preventDefault(); selectPerson(pe.dataset.person); return; }
   if (t.dataset.check) fetch('/api/refresh?name=' + encodeURIComponent(t.dataset.check), { method: 'POST' });
   if (t.dataset.del && confirm(`¿Dejar de seguir a ${t.dataset.del}?`)) { await fetch('/api/people?name=' + encodeURIComponent(t.dataset.del), { method: 'DELETE' }); selected = null; load(); }
 });
 
 // Respaldo: refresca la vista cada 30 s (las notificaciones las manda el servidor de forma nativa).
 setInterval(() => { if (!D.running) load(); }, 30000);
+setMainTab(mainTab); setSideTab(sideTab);
 load();
 </script>
 </body>

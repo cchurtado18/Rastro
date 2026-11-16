@@ -37,8 +37,24 @@ Los umbrales están en `DEFAULTS` de `lib/tracker.js`.
 - **Mudanzas vía exchange:** si el dinero entra a un exchange, busca retiros de ~la misma cantidad (90–101%) en las 6 h
   siguientes hacia wallets nuevas que después compraron. Si hay una sola coincidencia, es la nueva wallet; si hay varias,
   se marcan en rosa como "posibles" y tú decides. Solo depósitos de las últimas 72 h.
-- **Tokens falsos:** un token que usa el símbolo de USDT, USDC, SOL, JUP, BONK, WIF, etc. con otro mint se marca como
-  imitación, no avisa y no cuenta para decidir con cuál wallet compra más.
+- **Tokens falsos:** un token que copia la dirección de USDT, USDC, SOL, JUP, BONK, WIF, etc., o que usa su símbolo
+  y se hace pasar por él (nombre "USDT", "Tether USD"…), es una imitación: no avisa y no cuenta como compra.
+
+## Qué cuenta como wallet que tradea
+
+Solo las wallets que compran y venden memecoins son "wallets de la persona". Lo demás es el camino del dinero:
+
+- **Imitaciones y estables no son trading.** Un "USDT" que copia la dirección del real, o comprar estables / SOL en staking, se lee como el envío de dinero que era. Una memecoin que solo comparte el símbolo (p. ej. una llamada "USDC") sí cuenta.
+- **Puente**: solo reenvía. Si una wallet de la cadena no tiene ni una compra ni una venta, sale de la cadena y se dibuja como el puente entre las dos que sí tradean.
+- **Depósito / servicio**: recibe de 6 o más wallets distintas y no compra. No se sigue ni se vigila.
+- **Otra persona**: una wallet de alguien más que sigues nunca se le asigna a esta. Y pasando por puentes, una wallet que ya tradeaba antes de recibir el dinero tampoco (es otra persona que recibió un envío).
+- **Mucho ritmo ≠ exchange**: si una wallet hace más de 200 tx/h pero la mayoría son compras firmadas por ella, es alguien que tradea mucho y se sigue normal.
+
+## Buscar por CA
+
+Pega el CA de una moneda en el buscador de arriba, en la pestaña 🔎 CA, o toca la 🔎 de una compra en la terminal. Revisa a fondo las wallets de cada persona y las de su red (anteriores, "también compra", "vigilar", posibles vía exchange, puentes) y dice quién la compró, con qué wallet, cuántas veces, cuánto gastó y recibió, la primera y la última vez, y si todavía tiene tokens.
+
+No lee miles de transacciones: calcula la cuenta de ese token de cada wallet (ATA) y lee solo su historial, que queda aunque ya haya vendido todo. Si pegas una wallet en vez de un CA y es de la red de alguien, te lleva a ella. Las últimas búsquedas quedan como atajos.
 
 ## Coincidencias (convergencia)
 

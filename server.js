@@ -7,10 +7,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { addPerson, removePerson, people, state, refresh, short } from './lib/store.js';
+import { addPerson, removePerson, people, state, refresh, short, isAddress } from './lib/store.js';
+import { searchMint } from './lib/casearch.js';
 import { startRealtime } from './lib/realtime.js';
-import { transaction, tokenInfo } from './lib/solana.js';
-import { parseTx, DEFAULTS } from './lib/tracker.js';
+import { transaction, tokenInfo, DATA } from './lib/solana.js';
+import { readTrades, DEFAULTS } from './lib/tracker.js';
 import { createDetector, findConvergences, buysFromState } from './lib/convergence.js';
 
 const PORT = Number(process.env.PORT || 4777);
@@ -20,13 +21,30 @@ const HTML = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', '
 
 let running = null;
 let lastRun = null;
-const events = []; // últimos avisos (cambios de wallet y compras nuevas)
+// Últimos avisos (compras, envíos, cambios de wallet, coincidencias). Se guardan en disco
+// para que la terminal y los avisos sigan ahí después de reiniciar.
+const EVENTS_FILE = path.join(DATA, 'events.json');
+const MAX_EVENTS = 1000;
+const events = (() => { try { return JSON.parse(fs.readFileSync(EVENTS_FILE, 'utf8')).slice(0, MAX_EVENTS); } catch { return []; } })();
+let saveTimer = null;
+function saveEvents() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const tmp = EVENTS_FILE + '.tmp';
+    fs.writeFile(tmp, JSON.stringify(events), (err) => { if (!err) fs.rename(tmp, EVENTS_FILE, () => {}); });
+  }, 500);
+}
 const clients = new Set(); // navegadores conectados al stream en vivo
 const broadcast = (e) => { const line = `data: ${JSON.stringify(e)}\n\n`; for (const c of clients) c.write(line); };
 
 const pending = new Set(); // búsquedas pedidas mientras otra estaba corriendo ('*' = todos)
-const alerted = new Set(); // compras ya avisadas (firma:mint), para no avisar dos veces
-const extraWatch = new Map(); // wallets que acaban de recibir dinero: se vigilan al instante
+const alerted = new Set(events.filter((e) => e.type === 'buy').map((e) => e.trade.sig + ':' + e.trade.mint)); // compras ya avisadas (firma:mint), para no avisar dos veces
+// Wallets que acaban de recibir dinero de una wallet de la persona: se vigilan al instante, pero solo
+// para cazar su primera compra. Sus propios envíos no avisan ni agregan más wallets (eso hacía una
+// cadena sin fin). Caducan a las 6 h; la revisión completa decide si de verdad es la nueva wallet.
+const extraWatch = new Map(); // dirección → { name, at }
+const EXTRA_TTL = 6 * 3600;
+const txRate = new Map(); // dirección → marcas de tiempo recientes (para soltar wallets con ritmo de bot)
 
 // Notificación nativa de macOS.
 function notify(title, text) {
@@ -36,7 +54,8 @@ function notify(title, text) {
 
 function pushEvent(e) {
   const ev = { ...e, at: e.at || Math.floor(Date.now() / 1000) };
-  events.unshift(ev); events.splice(100);
+  events.unshift(ev); events.splice(MAX_EVENTS);
+  saveEvents();
   broadcast({ t: 'alert', event: ev });
   if (ev.type === 'buy') checkConvergence(ev);
   if (ev.type === 'buy') notify(`🟢 ${ev.name} compró ${ev.symbol || short(ev.trade.mint)}`, `${ev.trade.sol ? ev.trade.sol.toFixed(2) + ' SOL' : ev.trade.usd.toFixed(0) + ' USD'} con ${short(ev.wallet)}`);
@@ -91,7 +110,7 @@ function run(only) {
 // ---------- Tiempo real ----------
 // Wallets que se vigilan por websocket: la activa, sus wallets anteriores recientes, las que también
 // compran, las que recibieron dinero y aún no compran, y las que acaban de recibir un envío.
-function watched() {
+function coreWallets() {
   const st = state();
   const map = new Map();
   for (const p of people()) {
@@ -103,7 +122,15 @@ function watched() {
     r?.alsoActive?.forEach((a) => add(a.to));
     r?.watch?.forEach((w) => add(w.to));
   }
-  for (const [a, n] of extraWatch) if (!map.has(a)) map.set(a, n);
+  return map;
+}
+function watched() {
+  const map = coreWallets();
+  const now = Math.floor(Date.now() / 1000);
+  for (const [a, x] of extraWatch) {
+    if (now - x.at > EXTRA_TTL) { extraWatch.delete(a); continue; }
+    if (!map.has(a)) map.set(a, x.name);
+  }
   return map;
 }
 const rt = startRealtime({ onTx: onRealtimeTx, log: (m) => { console.log(m); broadcast({ t: 'rt' }); } });
@@ -111,30 +138,54 @@ function syncRealtime() { rt.setWallets(watched()); broadcast({ t: 'rt' }); }
 
 const recheck = new Map(); // persona → temporizador (agrupa varias firmas seguidas en una revisión)
 async function onRealtimeTx(wallet, name, sig) {
+  const core = coreWallets().has(wallet);
+  if (!core) {
+    // Una wallet vigilada de paso que se mueve como bot (muchas tx por minuto) se suelta.
+    const now = Date.now();
+    const hits = (txRate.get(wallet) || []).filter((t) => now - t < 60_000);
+    hits.push(now); txRate.set(wallet, hits);
+    if (hits.length > 20) { extraWatch.delete(wallet); txRate.delete(wallet); syncRealtime(); console.log(`Suelto ${short(wallet)}: ritmo de bot`); return; }
+  }
   let tx = null;
   for (let i = 0; i < 4 && !tx; i++) { tx = await transaction(sig).catch(() => null); if (!tx) await new Promise((r) => setTimeout(r, 800)); }
-  const p = parseTx(tx, wallet);
+  // Igual que la revisión completa: imitaciones y estables no son compras (y su envío sí cuenta).
+  const { parsed: [p], info } = await readTrades(wallet, [tx]);
   if (p) {
     const buys = p.trades.filter((t) => t.side === 'buy');
-    const info = buys.length ? await tokenInfo(buys.map((t) => t.mint)).catch(() => ({})) : {};
     for (const t of buys) {
       const k = t.sig + ':' + t.mint;
-      if (alerted.has(k) || info[t.mint]?.spoof) continue;
+      if (alerted.has(k)) continue;
       alerted.add(k);
       pushEvent({ type: 'buy', name, wallet, trade: t, symbol: info[t.mint]?.symbol, instant: true });
     }
     for (const m of p.moves) {
       const big = m.asset === 'SOL' ? m.amount >= DEFAULTS.minMoveSol : m.amount >= DEFAULTS.minMoveUsd;
-      if (m.dir !== 'out' || !big) continue;
+      if (m.dir !== 'out' || !big || !core) continue;
       // Empieza a vigilar el destino ya mismo: su primera compra también llega al instante.
-      extraWatch.set(m.to, name);
+      if (!coreWallets().has(m.to)) extraWatch.set(m.to, { name, at: Math.floor(Date.now() / 1000) });
       pushEvent({ type: 'move', name, from: wallet, to: m.to, amount: m.amount, asset: m.asset, sig: m.sig });
       syncRealtime();
     }
   }
   // Revisión completa de esa persona unos segundos después (mudanza, comparación, mapa).
+  // Una wallet vigilada de paso solo la provoca si compró (si no, solo es ruido).
+  if (!core && !p?.trades.some((t) => t.side === 'buy')) return;
   clearTimeout(recheck.get(name));
   recheck.set(name, setTimeout(() => { recheck.delete(name); run(name); }, 5000));
+}
+
+// Wallets donde se busca un CA: las de cada persona (activa primero) y las de su red que pueden tradear.
+// Exchanges, depósitos y quienes le mandaron dinero no se revisan.
+const SEARCH_ROLES = new Set(['also', 'buyer', 'watch', 'cex', 'bridge', 'seen', 'old']);
+function searchUniverse() {
+  const st = state();
+  const out = new Map();
+  const add = (address, person, role) => { if (address && !out.has(address)) out.set(address, { address, person, role }); };
+  const list = people();
+  for (const p of list) { add(p.active, p.name, 'active'); [...p.wallets].reverse().forEach((w) => add(w, p.name, 'old')); }
+  for (const p of list) for (const n of st[p.name]?.graph?.nodes || []) if (SEARCH_ROLES.has(n.status)) add(n.id, p.name, n.status);
+  for (const p of list) for (const b of p.bridges || []) add(b.id, p.name, 'bridge');
+  return [...out.values()];
 }
 
 const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -152,7 +203,12 @@ http.createServer(async (req, res) => {
       req.on('close', () => { clearInterval(ping); clients.delete(res); });
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { people: people(), state: state(), events, running: !!running, lastRun, refreshMin: REFRESH_MIN, convergeMin: CONVERGE_MIN, convergences: convergences(), realtime: rt.status() });
+    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { people: people(), state: state(), events: events.slice(0, 300), running: !!running, lastRun, refreshMin: REFRESH_MIN, convergeMin: CONVERGE_MIN, convergences: convergences(), realtime: rt.status() });
+    if (req.method === 'GET' && url.pathname === '/api/ca') {
+      const mint = String(url.searchParams.get('mint') || '').trim();
+      if (!isAddress(mint)) return json(res, 400, { error: 'Pega el CA completo de la moneda' });
+      return json(res, 200, await searchMint(mint, searchUniverse()));
+    }
     if (req.method === 'POST' && url.pathname === '/api/people') {
       const { name, wallet } = await body(req);
       addPerson(String(name || '').trim(), String(wallet || '').trim());
