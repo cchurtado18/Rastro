@@ -2400,9 +2400,42 @@ const FOLLOW_STABLES   = new Set([USDC_MINT, USDT_MINT]);
 const FOLLOW_DAY       = 86400;
 const FOLLOW_DUST_SOL  = 0.05;  // below this a transfer is a fee, tip, rebate or spam
 const FOLLOW_EDGE_SOL  = 0.5;   // minimum moved between two wallets to draw and follow the link
-const FOLLOW_TRADE_SOL = 0.005; // below this a balance change is rent or fees, not a trade
+const FOLLOW_TRADE_SOL = 0.01;  // a trade under this (or under FOLLOW_TRADE_USD) is dust: bots, tests, airdrops
+const FOLLOW_TRADE_USD = 1;
 const FOLLOW_GAP_MS    = 450;   // one Helius request per gap, shared by every Follow call
-const FOLLOW_CAPS      = { funders: 5, l1: 6, l2: 10, l3: 8, perParent: 4, hubMatches: 3, sisters: 4 };
+const FOLLOW_CAPS      = { funders: 5, l1: 6, l2: 10, l3: 8, perParent: 4, hubMatches: 5, sisters: 4, cexSearches: 1 };
+// After a deposit into an exchange: look for withdrawals of 90–101% of it during the next
+// windowH hours. Deposits older than maxAgeH, or under minSol, are not chased.
+const FOLLOW_CEX       = { windowH: 6, maxAgeH: 72, chunk: 1800, minSol: 1 };
+
+// Well-known coins. A token that copies the start of one of these addresses (address poisoning),
+// or takes its symbol while posing as it, is an imitation: it never counts as a buy.
+const FOLLOW_KNOWN = {
+  SOL: WSOL, WSOL, USDC: USDC_MINT, USDT: USDT_MINT,
+  JUP: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", BONK: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  WIF: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", RAY: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+  JTO: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL", PYTH: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+};
+// Stables and staked SOL: buying them is parking money, not trading
+const FOLLOW_PARKED = new Set(["USDT", "USDC", "USDS", "USD1", "PYUSD", "USDE", "USDH", "FDUSD", "DAI", "EURC", "USDG", "USDY", "UXD",
+  "SOL", "WSOL", "MSOL", "JITOSOL", "BSOL", "JUPSOL", "INF", "HSOL", "BNSOL", "DSOL", "VSOL", "PICOSOL", "STSOL", "LST"]);
+const followSym = (x) => String(x || "").toUpperCase().replace(/^\$/, "");
+// Does the name pass itself off as the real coin? A memecoin that merely shares a symbol is a real buy.
+function followPoses(sym, name) {
+  const n = followSym(name).replace(/[^A-Z0-9]/g, "");
+  return !n || n.includes(sym) || /USD|DOLLAR|TETHER|STAKED|STAKING|WRAPPED/.test(n);
+}
+function followPoison(mint) {
+  for (const real of Object.values(FOLLOW_KNOWN)) if (mint !== real && mint.slice(0, 6) === real.slice(0, 6)) return true;
+  return false;
+}
+// "fake" = imitation of a known coin · "park" = a stable or staked SOL · null = real trading
+function followNotTrade(mint, info) {
+  if (followPoison(mint)) return "fake";
+  const sym = followSym(info?.symbol);
+  if (FOLLOW_KNOWN[sym] && FOLLOW_KNOWN[sym] !== mint && followPoses(sym, info?.name)) return "fake";
+  return FOLLOW_PARKED.has(sym) && followPoses(sym, info?.name) ? "park" : null;
+}
 
 let _followLast  = 0;
 let _followQueue = Promise.resolve();
@@ -2475,7 +2508,9 @@ async function followFetchTokenMeta(mints, apiKey, signal) {
 }
 
 // Reads a wallet's transactions into trades (buys / sells) and money flows per counterparty.
-function followAnalyze(txs, wallet) {
+// `skip`: Map mint → "fake" | "park" for tokens that are not trading (see followNotTrade).
+function followAnalyze(txs, wallet, skip) {
+  const fake = (m) => skip?.get(m) === "fake" || followPoison(m);
   const trades = [];
   const flows  = new Map();
   const flow = (addr) => {
@@ -2491,7 +2526,7 @@ function followAnalyze(txs, wallet) {
     if (tx.transactionError) continue;
 
     // Net balance change of this wallet: SOL (native + wrapped), stables, and every other token
-    let sol = 0, stable = 0;
+    let sol = 0, stable = 0, parked = false;
     const tok = new Map();
     if (Array.isArray(tx.accountData) && tx.accountData.length) {
       for (const a of tx.accountData) {
@@ -2502,6 +2537,8 @@ function followAnalyze(txs, wallet) {
           if (!amt) continue;
           if (c.mint === WSOL) sol += amt;
           else if (FOLLOW_STABLES.has(c.mint)) stable += amt;
+          else if (fake(c.mint)) continue;
+          else if (skip?.get(c.mint) === "park") parked = true;
           else tok.set(c.mint, (tok.get(c.mint) || 0) + amt);
         }
       }
@@ -2515,6 +2552,8 @@ function followAnalyze(txs, wallet) {
         if (!d || t.mint === WSOL) continue;
         const amt = d * (t.tokenAmount || 0);
         if (FOLLOW_STABLES.has(t.mint)) stable += amt;
+        else if (fake(t.mint)) continue;
+        else if (skip?.get(t.mint) === "park") parked = true;
         else tok.set(t.mint, (tok.get(t.mint) || 0) + amt);
       }
     }
@@ -2527,20 +2566,21 @@ function followAnalyze(txs, wallet) {
 
     if (got || gave) {
       // A token moved: it is a trade when SOL or a stable moved the other way
-      const paid     = sol <= -FOLLOW_TRADE_SOL || stable <= -0.5;
-      const received = sol >=  FOLLOW_TRADE_SOL || stable >=  0.5;
+      const paid     = sol <= -FOLLOW_TRADE_SOL || stable <= -FOLLOW_TRADE_USD;
+      const received = sol >=  FOLLOW_TRADE_SOL || stable >=  FOLLOW_TRADE_USD;
       if (got && paid) {
         trades.push({ sig: tx.signature, ts, side: "buy", mint: got.mint, amount: got.amt,
-          sol: sol <= -FOLLOW_TRADE_SOL ? -sol : 0, usd: stable <= -0.5 ? -stable : 0 });
+          sol: sol <= -FOLLOW_TRADE_SOL ? -sol : 0, usd: stable <= -FOLLOW_TRADE_USD ? -stable : 0 });
       } else if (gave && received) {
         trades.push({ sig: tx.signature, ts, side: "sell", mint: gave.mint, amount: gave.amt,
-          sol: sol >= FOLLOW_TRADE_SOL ? sol : 0, usd: stable >= 0.5 ? stable : 0 });
+          sol: sol >= FOLLOW_TRADE_SOL ? sol : 0, usd: stable >= FOLLOW_TRADE_USD ? stable : 0 });
       }
       continue; // never read a trade's fee and pool transfers as money sent to someone
     }
+    if (parked) continue; // swapped into a stable or staked SOL: parked money, neither a trade nor a transfer
 
     // SOL ↔ stable conversion: not a transfer to anyone
-    if (Math.abs(stable) >= 0.5 && Math.abs(sol) >= FOLLOW_TRADE_SOL && Math.sign(stable) !== Math.sign(sol)) continue;
+    if (Math.abs(stable) >= FOLLOW_TRADE_USD && Math.abs(sol) >= FOLLOW_TRADE_SOL && Math.sign(stable) !== Math.sign(sol)) continue;
 
     if (Math.abs(stable) >= 1) {
       for (const t of tx.tokenTransfers || []) {
@@ -2623,8 +2663,9 @@ function followScore(node, ctx) {
     s += deposit ? 30 : 18;
     why.push(deposit ? "deposita en la misma dirección de exchange que la raíz" : "manda SOL al mismo puente que la raíz");
   } else if (node.viaHub) {
-    s += 4 + Math.round(12 * (node.match?.q || 0));
-    why.push(`un exchange/bot le pagó ${followDur(node.match?.dt || 0)} después del depósito, el ${Math.round((node.match?.ratio || 0) * 100)}% del monto`);
+    s += 4 + Math.round(12 * (node.match?.q || 0)) + (node.single ? 16 : 0);
+    why.push(`un exchange le pagó ${followDur(node.match?.dt || 0)} después del depósito, el ${Math.round((node.match?.ratio || 0) * 100)}% del monto`);
+    if (node.single) why.push("es la única wallet nueva que retiró esa cantidad y después compró");
   } else if (node.viaDist) {
     s += 14; why.push("fondeada por un distribuidor al que la raíz también le manda SOL");
   } else if (node.depth === 1) { s += 28; why.push("recibió SOL directo de la wallet raíz"); }
@@ -2655,13 +2696,32 @@ function followScore(node, ctx) {
   if (node.buys > 0 && node.recvTs && node.lastBuyTs > node.recvTs && ctx.rootLastBuyTs < node.recvTs) {
     s += 10; why.push("la raíz dejó de comprar después de fondearla");
   }
-  return { score: Math.max(1, Math.min(99, s)), why };
+  // Rastro's rule: past a bridge, a wallet that was already trading before the money arrived
+  // is usually someone else who got paid, not a move
+  const con = [];
+  if (node.side === "out" && node.depth >= 2 && !node.viaHub && node.firstBuyTs && node.recvTs && node.firstBuyTs < node.recvTs - 60) {
+    s -= 14; con.push("ya compraba antes de recibir este SOL: puede ser otra persona a la que le pagaron");
+  }
+  return { score: Math.max(1, Math.min(99, s)), why, con };
 }
 
-const followScored = (n) => n.side !== "in" && !["root", "alias", "exchange", "deposit"].includes(n.role);
+// Rastro's "mudanza": a wallet that received the person's SOL, bought after receiving it, and
+// has bought more recently than any of the person's own wallets.
+function followMove(person, nodes) {
+  const own = new Set([person.root, ...(person.aliases || [])]);
+  const ownLast = Math.max(0, ...(person.trades || []).filter((t) => t.side === "buy" && own.has(t.wallet)).map((t) => t.ts));
+  return (nodes || [])
+    .filter((n) => n.role === "trader" && n.side === "out" && !own.has(n.addr) && n.buys > 0 && n.recvTs
+      && n.lastBuyTs > n.recvTs && n.lastBuyTs > ownLast
+      && (!n.viaHub || n.single) && (n.depth === 1 || !(n.firstBuyTs < n.recvTs - 60)))
+    .sort((a, b) => b.lastBuyTs - a.lastBuyTs)[0] || null;
+}
+
+const followScored = (n) => n.side !== "in" && !["root", "alias", "exchange", "deposit", "person"].includes(n.role);
 
 // Full scan: root (+ confirmed wallets) → who funded it → where the money went, up to 3 hops.
-async function followScan(person, apiKey, signal, onProgress) {
+// `meta`: followMetaCache (token rules) · `others`: Map wallet → name, for wallets of other people you follow.
+async function followScan(person, apiKey, signal, onProgress, { meta = null, others = null } = {}) {
   const now    = Math.floor(Date.now() / 1000);
   const since  = now - 7 * FOLLOW_DAY;
   const root   = person.root;
@@ -2675,7 +2735,7 @@ async function followScan(person, apiKey, signal, onProgress) {
 
   const load = async (addr, opts) => {
     const r  = await followFetchTxs(addr, apiKey, signal, opts);
-    const an = followAnalyze(r.txs, addr);
+    const an = await followRead(r.txs, addr, meta, signal);
     an.txs = r.txs; an.complete = r.complete; an.cursor = r.cursor;
     analyses.set(addr, an);
     return an;
@@ -2749,6 +2809,7 @@ async function followScan(person, apiKey, signal, onProgress) {
   const queue = [];
   const perDepth = { 1: 0, 2: 0, 3: 0 };
   const depthCap = { 1: FOLLOW_CAPS.l1, 2: FOLLOW_CAPS.l2, 3: FOLLOW_CAPS.l3 };
+  let cexLeft = FOLLOW_CAPS.cexSearches;
   const enqueue = (parentAddr, child, depth) => {
     if (nodes.has(child.addr) || queue.some((q) => q.addr === child.addr)) return;
     if (perDepth[depth] >= depthCap[depth]) return;
@@ -2773,18 +2834,20 @@ async function followScan(person, apiKey, signal, onProgress) {
       node.role = "exchange"; node.exName = KNOWN_EXCHANGES.get(addr); node.lost = true;
       continue;
     }
+    if (others?.has(addr)) {
+      // A wallet of someone else you follow is never assigned to this person
+      node.role = "person"; node.owner = others.get(addr);
+      continue;
+    }
 
     report(`Capa ${depth} · ${shortAddr(addr, 4, 4)}`);
-    let an = analyses.get(addr) || await load(addr, { maxPages: 1 });
+    const an = analyses.get(addr) || await load(addr, { maxPages: 1 });
     const kind = ownSet.has(addr) ? null : followHubKind(an);
 
-    // A busy service pushes our deposit off the first page: read back to the moment it arrived
-    if (kind === "exchange" && depth < 3 && !an.complete && an.firstTs > node.recvTs) {
-      const more = await followFetchTxs(addr, apiKey, signal, { maxPages: 2, untilTs: node.recvTs, before: an.cursor });
-      const txs = [...an.txs, ...more.txs];
-      an = followAnalyze(txs, addr);
-      an.txs = txs; an.complete = more.complete; an.cursor = more.cursor;
-      analyses.set(addr, an);
+    // Paid by an exchange: only a wallet with almost no history before that withdrawal is "new"
+    if (node.viaHub && an.txs.filter((t) => (t.timestamp || 0) < node.recvTs - 60).length > 3) {
+      nodes.delete(addr); edges.pop(); perDepth[depth]--;
+      continue;
     }
 
     const st = describe(node, an);
@@ -2808,25 +2871,35 @@ async function followScan(person, apiKey, signal, onProgress) {
     if (depth >= 3) continue;
 
     if (node.role === "exchange") {
-      // Match what came out of the service against what went in: close in amount, soon after
-      const deposits = (an.flows.get(parent)?.ev || []).filter((e) => e.dir === "in" && e.sol >= FOLLOW_DUST_SOL);
-      node.lost = !an.complete && an.firstTs > node.recvTs;
+      // Rastro's rule: after a deposit, look for withdrawals of about the same amount (90–101%)
+      // in the following hours, to wallets that are new. One match is the new wallet; several are "possible".
+      const deposits = (analyses.get(parent)?.flows.get(addr)?.ev || []).filter((e) => e.dir === "out" && e.sol >= FOLLOW_DUST_SOL);
+      if (!deposits.length) deposits.push({ sol: node.recv, ts: node.recvTs });
+      const span = FOLLOW_CEX.windowH * 3600, maxAge = FOLLOW_CEX.maxAgeH * 3600;
+      let outs = null;
+      if (an.complete || an.firstTs <= node.recvTs) {
+        outs = [...an.flows.values()].flatMap((f) => f.ev.filter((e) => e.dir === "out" && e.sol).map((e) => ({ to: f.addr, sol: e.sol, ts: e.ts })));
+      } else if (cexLeft > 0 && node.recv >= FOLLOW_CEX.minSol && now - node.recvLastTs <= maxAge) {
+        cexLeft--;
+        report(`Exchange ${shortAddr(addr, 4, 4)} · buscando retiros parecidos`);
+        const recent = deposits.filter((d) => now - d.ts <= maxAge);
+        const from = Math.min(...recent.map((d) => d.ts));
+        outs = await followExchangeWithdrawals(addr, from, Math.min(now - 60, Math.max(...recent.map((d) => d.ts)) + span), apiKey, signal);
+        node.searched = outs.length;
+      }
+      node.lost = !outs;
       const best = new Map();
-      for (const f of an.flows.values()) {
-        if (f.addr === parent || nodes.has(f.addr)) continue;
-        for (const e of f.ev) {
-          if (e.dir !== "out" || !e.sol) continue;
-          for (const d of deposits) {
-            const dt = e.ts - d.ts, ratio = e.sol / d.sol;
-            if (dt < -30 || dt > 2 * FOLLOW_DAY || ratio < 0.5 || ratio > 1.03) continue;
-            const q = 0.55 * (1 - Math.abs(1 - ratio) / 0.5) + 0.45 / (1 + Math.max(0, dt) / 7200);
-            const cur = best.get(f.addr);
-            if (!cur || q > cur.match.q) best.set(f.addr, { addr: f.addr, recv: e.sol, recvUsd: 0, n: 1, recvTs: e.ts, recvLastTs: e.ts, match: { q, dt: Math.max(0, dt), ratio } });
-          }
+      for (const e of outs || []) {
+        if (e.to === parent || nodes.has(e.to)) continue;
+        for (const d of deposits) {
+          const dt = e.ts - d.ts, ratio = e.sol / d.sol;
+          if (dt < -30 || dt > span || ratio < 0.9 || ratio > 1.01) continue;
+          const q = 0.6 * (1 - Math.abs(1 - ratio) / 0.1) + 0.4 / (1 + Math.max(0, dt) / 3600);
+          const cur = best.get(e.to);
+          if (!cur || q > cur.match.q) best.set(e.to, { addr: e.to, recv: e.sol, recvUsd: 0, n: 1, recvTs: e.ts, recvLastTs: e.ts, match: { q, dt: Math.max(0, dt), ratio } });
         }
       }
-      [...best.values()].filter((c) => c.match.q >= 0.35).sort((a, b) => b.match.q - a.match.q)
-        .slice(0, FOLLOW_CAPS.hubMatches).forEach((c) => enqueue(addr, c, depth + 1));
+      [...best.values()].sort((a, b) => b.match.q - a.match.q).slice(0, FOLLOW_CAPS.hubMatches).forEach((c) => enqueue(addr, c, depth + 1));
     } else if (node.role === "distributor") {
       // Wallets it funds: the ones that also send money back first, then the most recent
       outflows(addr, 0).filter((c) => c.addr !== parent)
@@ -2897,9 +2970,16 @@ async function followScan(person, apiKey, signal, onProgress) {
     }
   }
 
+  // Via an exchange: when exactly one new wallet withdrew about the same and then bought, it is the one
+  for (const x of nodes.values()) {
+    if (x.role !== "exchange") continue;
+    const hits = [...nodes.values()].filter((n) => n.parent === x.addr && n.viaHub && n.buys > 0 && n.lastBuyTs >= n.recvTs);
+    if (hits.length === 1) hits[0].single = true;
+  }
+
   for (const n of nodes.values()) {
     if (followScored(n)) Object.assign(n, followScore(n, ctx));
-    else { delete n.score; delete n.why; }
+    else { delete n.score; delete n.why; delete n.con; }
   }
 
   trades.sort((a, b) => b.ts - a.ts);
@@ -2907,19 +2987,21 @@ async function followScan(person, apiKey, signal, onProgress) {
   return { ...snapshot(), trades: trades.slice(0, 400), scannedAt: now };
 }
 
-// Light check between full scans: new trades on the person's wallets, money leaving to
-// addresses that are not on the map yet, and quiet candidates that started buying.
-async function followRefresh(person, apiKey, signal) {
+// Light check between full scans: everything new on the person's wallets since the last check
+// (nothing is missed while the app was closed), money leaving to addresses that are not on the
+// map yet, quiet candidates that started buying, and a possible move to a new wallet.
+async function followRefresh(person, apiKey, signal, { meta = null } = {}) {
   const now   = Math.floor(Date.now() / 1000);
   const own   = [person.root, ...(person.aliases || [])];
   const known = new Set((person.trades || []).map((t) => t.sig + t.mint));
   const nodes = (person.graph?.nodes || []).map((n) => ({ ...n }));
   const byAddr = new Map(nodes.map((n) => [n.addr, n]));
   const fresh = [], alerts = [];
+  const since = person.checkedAt ? person.checkedAt - 300 : 0;
 
   for (const w of own) {
-    const { txs } = await followFetchTxs(w, apiKey, signal, { maxPages: 1 });
-    const an = followAnalyze(txs, w);
+    const { txs } = await followFetchTxs(w, apiKey, signal, { maxPages: since ? 5 : 1, untilTs: since });
+    const an = await followRead(txs, w, meta, signal);
     for (const t of an.trades) {
       if (known.has(t.sig + t.mint)) continue;
       known.add(t.sig + t.mint);
@@ -2937,11 +3019,11 @@ async function followRefresh(person, apiKey, signal) {
   const ownMints = new Set(trades.filter((t) => t.side === "buy").map((t) => t.mint));
   const ctx = { rootLastBuyTs: Math.max(0, ...trades.filter((t) => t.side === "buy" && t.wallet === person.root).map((t) => t.ts)) };
   const recheck = nodes
-    .filter((n) => followScored(n) && (n.role === "watch" || (n.score || 0) >= 50))
+    .filter((n) => followScored(n) && n.buys != null && (n.role === "watch" || (n.score || 0) >= 50))
     .sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3);
   for (const n of recheck) {
     const { txs } = await followFetchTxs(n.addr, apiKey, signal, { maxPages: 1 });
-    const an = followAnalyze(txs, n.addr);
+    const an = await followRead(txs, n.addr, meta, signal);
     const st = followTradeStats(an.trades, now);
     if (st.buys > 0 && !(n.buys > 0)) alerts.push({ kind: "woke", ts: st.firstBuyTs, addr: n.addr, buys: st.buys });
     Object.assign(n, {
@@ -2954,7 +3036,287 @@ async function followRefresh(person, apiKey, signal) {
     Object.assign(n, followScore(n, ctx));
   }
 
+  const move = followMove({ ...person, trades }, nodes);
+  if (move) alerts.push({ kind: "switch", ts: move.recvTs, addr: move.addr, buys: move.buys });
   return { fresh, alerts, nodes, checkedAt: now };
+}
+
+// ─── Follow · real time, convergence, CA search (ported from Rastro) ──────────
+
+// Token symbols, fetched once per mint and shared by every scan, check and live update.
+function followMetaCache(initial, apiKey) {
+  const known = { ...initial };
+  return {
+    known,
+    async ensure(mints, signal) {
+      const missing = [...new Set(mints)].filter((m) => !known[m]);
+      if (!missing.length) return;
+      Object.assign(known, await followFetchTokenMeta(missing, apiKey, signal));
+      for (const m of missing) known[m] ||= { symbol: "", name: "" };
+    },
+    skipOf(mints) {
+      const skip = new Map();
+      for (const m of mints) { const kind = followNotTrade(m, known[m]); if (kind) skip.set(m, kind); }
+      return skip;
+    },
+  };
+}
+
+// followAnalyze, minus imitations and parked money: what is left is real trading.
+async function followRead(txs, wallet, meta, signal) {
+  const an = followAnalyze(txs, wallet);
+  const mints = [...new Set(an.trades.map((t) => t.mint))];
+  if (!meta || !mints.length) return an;
+  await meta.ensure(mints, signal);
+  const skip = meta.skipOf(mints);
+  return skip.size ? followAnalyze(txs, wallet, skip) : an;
+}
+
+// One transaction by signature (it can take a moment to be indexed after the websocket fires)
+async function followFetchBySig(sig, apiKey, signal) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await followSlot(signal);
+    try {
+      const res = await fetch(`https://api.helius.xyz/v0/transactions?api-key=${apiKey}`, {
+        method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transactions: [sig] }),
+      });
+      if (res.ok) { const j = await res.json(); if (Array.isArray(j) && j[0]) return j[0]; }
+    } catch (e) { if (e.name === "AbortError") throw e; }
+    await sleep(900);
+  }
+  return null;
+}
+
+// SOL that left an exchange-scale wallet inside a time window, read in 30-minute slices
+// (a busy hot wallet moves ~100 transactions per slice, so "latest pages" never reach back).
+async function followExchangeWithdrawals(exchange, fromTs, toTs, apiKey, signal) {
+  const out = [];
+  let calls = 0;
+  for (let a = fromTs; a < toTs && calls < 26; a += FOLLOW_CEX.chunk) {
+    const b = Math.min(toTs, a + FOLLOW_CEX.chunk - 1);
+    let before = null;
+    for (let page = 0; page < 2 && calls < 26; page++) {
+      calls++;
+      await followSlot(signal);
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const res = await fetch(`https://api.helius.xyz/v0/addresses/${exchange}/transactions?api-key=${apiKey}&limit=100&gte-time=${a}&lte-time=${b}${before ? `&before=${before}` : ""}`, { signal });
+      if (res.status === 429) { await sleep(2000); page--; continue; }
+      const list = res.ok ? await res.json() : [];
+      if (!Array.isArray(list) || !list.length) break;
+      for (const t of list) {
+        if (t.transactionError) continue;
+        for (const n of t.nativeTransfers || []) {
+          if (n.fromUserAccount === exchange && n.toUserAccount && n.toUserAccount !== exchange && n.amount >= FOLLOW_DUST_SOL * 1e9) {
+            out.push({ to: n.toUserAccount, sol: n.amount / 1e9, ts: t.timestamp });
+          }
+        }
+      }
+      if (list.length < 100) break;
+      before = list[list.length - 1].signature;
+    }
+  }
+  return out;
+}
+
+// Helius websocket: one logsSubscribe per watched wallet. A buy or a transfer arrives in 1–2 s.
+// Reconnects by itself and subscribes again.
+function followRealtime(apiKey, onSig, onStatus) {
+  let ws = null, connected = false, closed = false, retry = 0, nextId = 1, timer = null;
+  let want = new Set();
+  const subs = new Map(), bySub = new Map(), pending = new Map();
+  const status = () => onStatus?.({ connected, wallets: subs.size });
+  const send = (o) => { try { ws?.send(JSON.stringify(o)); } catch { /* sent again on reconnect */ } };
+  const subscribe = (a) => {
+    const id = nextId++;
+    pending.set(id, a);
+    send({ jsonrpc: "2.0", id, method: "logsSubscribe", params: [{ mentions: [a] }, { commitment: "confirmed" }] });
+  };
+  const unsubscribe = (a) => {
+    const sid = subs.get(a);
+    if (sid == null) return;
+    subs.delete(a); bySub.delete(sid);
+    send({ jsonrpc: "2.0", id: nextId++, method: "logsUnsubscribe", params: [sid] });
+  };
+  const connect = () => {
+    if (closed) return;
+    ws = new WebSocket(`wss://mainnet.helius-rpc.com/?api-key=${apiKey}`);
+    ws.onopen = () => {
+      connected = true; retry = 0;
+      subs.clear(); bySub.clear(); pending.clear();
+      for (const a of want) subscribe(a);
+      status();
+    };
+    ws.onmessage = (m) => {
+      let d;
+      try { d = JSON.parse(m.data); } catch { return; }
+      if (d.id != null && pending.has(d.id)) {
+        const a = pending.get(d.id);
+        pending.delete(d.id);
+        if (typeof d.result === "number") {
+          if (want.has(a)) { subs.set(a, d.result); bySub.set(d.result, a); status(); }
+          else send({ jsonrpc: "2.0", id: nextId++, method: "logsUnsubscribe", params: [d.result] });
+        }
+        return;
+      }
+      if (d.method === "logsNotification") {
+        const a = bySub.get(d.params?.subscription), v = d.params?.result?.value;
+        if (a && v && !v.err) onSig(a, v.signature);
+      }
+    };
+    ws.onclose = () => {
+      connected = false;
+      status();
+      if (!closed) timer = setTimeout(connect, Math.min(30000, 1000 * 2 ** retry++));
+    };
+    ws.onerror = () => {};
+  };
+  connect();
+  // Helius drops idle connections
+  const ping = setInterval(() => connected && send({ jsonrpc: "2.0", id: nextId++, method: "getHealth" }), 30000);
+  return {
+    setWallets(list) {
+      want = new Set(list);
+      if (!connected) return;
+      const waiting = new Set(pending.values());
+      for (const a of want) if (!subs.has(a) && !waiting.has(a)) subscribe(a);
+      for (const a of [...subs.keys()]) if (!want.has(a)) unsubscribe(a);
+      status();
+    },
+    close() {
+      closed = true; onStatus = null;
+      clearInterval(ping); clearTimeout(timer);
+      try { ws?.close(); } catch { /* already closed */ }
+    },
+  };
+}
+
+// Convergence: two or more different people buy the same coin within a short window. It is the
+// strongest signal following gives: not one person, a group arriving at the same place.
+const FOLLOW_CONVERGE = { windowSec: 30 * 60, minPeople: 2 };
+
+// buys: [{ name, wallet, mint, ts, sol, usd, sig }] → coins bought by at least `minPeople` people
+// inside `windowSec` (each person's first buy in the window; one person with two wallets counts once).
+function followConvergences(buys, { windowSec = FOLLOW_CONVERGE.windowSec, minPeople = FOLLOW_CONVERGE.minPeople } = {}) {
+  const byMint = new Map();
+  for (const b of buys) {
+    if (!b?.mint || !b.name) continue;
+    if (!byMint.has(b.mint)) byMint.set(b.mint, []);
+    byMint.get(b.mint).push(b);
+  }
+  const out = [];
+  for (const [mint, list] of byMint) {
+    list.sort((a, b) => a.ts - b.ts);
+    let best = null;   // sliding window: the largest group of different people
+    for (let i = 0; i < list.length; i++) {
+      const first = new Map();
+      for (let j = i; j < list.length && list[j].ts - list[i].ts <= windowSec; j++) {
+        if (!first.has(list[j].name)) first.set(list[j].name, list[j]);
+      }
+      const newer = best && first.size === best.size && [...first.values()].at(-1).ts > [...best.values()].at(-1).ts;
+      if (first.size >= minPeople && (!best || first.size > best.size || newer)) best = first;
+    }
+    if (!best) continue;
+    const people = [...best.values()].map((b) => ({ name: b.name, wallet: b.wallet, ts: b.ts, sol: b.sol || 0, usd: b.usd || 0, sig: b.sig }));
+    out.push({
+      mint, people, firstTs: people[0].ts, lastTs: people.at(-1).ts, spanSec: people.at(-1).ts - people[0].ts,
+      sol: people.reduce((s, p) => s + p.sol, 0), usd: people.reduce((s, p) => s + p.usd, 0),
+    });
+  }
+  return out.sort((a, b) => b.lastTs - a.lastTs);
+}
+
+// Live detector: feed it buys one by one; it answers with a convergence when a coin reaches
+// `minPeople` people, and again each time one more person joins. Never twice for the same group.
+function followDetector(opts = {}) {
+  const o = { ...FOLLOW_CONVERGE, ...opts };
+  let buys = [];
+  const seen = new Set();
+  const announced = new Map();
+  const add = (b) => {
+    const k = `${b.sig}:${b.mint}:${b.name}`;
+    if (seen.has(k)) return false;
+    seen.add(k); buys.push(b);
+    return true;
+  };
+  return {
+    seed(list) {
+      for (const b of list) add(b);
+      for (const c of followConvergences(buys, o)) announced.set(c.mint, c.people.length);
+    },
+    push(b, now = Math.floor(Date.now() / 1000)) {
+      if (!add(b)) return null;
+      buys = buys.filter((x) => x.ts >= now - Math.max(o.windowSec * 4, FOLLOW_DAY));
+      const c = followConvergences(buys.filter((x) => x.mint === b.mint), o)[0];
+      if (!c || !c.people.some((p) => p.name === b.name)) return null;
+      if ((announced.get(b.mint) || 0) >= c.people.length) return null;
+      announced.set(b.mint, c.people.length);
+      return c;
+    },
+  };
+}
+
+// Search by CA: who, among the people you follow and the wallets of their networks, traded this
+// coin? Each wallet's token account for the mint (its ATA) is derived and only that account's
+// history is read: it holds everything the wallet did with the coin, even after selling it all.
+const TOKEN_PROGRAM   = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN22_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const ATA_PROGRAM     = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+async function followFindPda(seeds, programId) {
+  const prog = b58Decode(programId);
+  for (let bump = 255; bump >= 0; bump--) {
+    const parts = [...seeds, new Uint8Array([bump]), prog, _PDA_MARKER];
+    const buf = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+    let off = 0;
+    for (const p of parts) { buf.set(p, off); off += p.length; }
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
+    if (!_isOnCurve(hash)) return b58Encode(hash);
+  }
+  return null;
+}
+const followAta = (owner, mint, program = TOKEN_PROGRAM) => followFindPda([b58Decode(owner), b58Decode(program), b58Decode(mint)], ATA_PROGRAM);
+
+async function followRpc(method, params, apiKey, signal) {
+  await followSlot(signal);
+  const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${apiKey}`, {
+    method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "fr", method, params }),
+  });
+  if (res.status === 401 || res.status === 403) { const e = new Error("INVALID_KEY"); e.code = "INVALID_KEY"; throw e; }
+  if (!res.ok) throw new Error(`HTTP_${res.status}`);
+  const j = await res.json();
+  if (j.error) throw new Error(j.error.message);
+  return j.result;
+}
+
+// wallets: [{ address, pid, name, role }]
+async function followSearchMint(mint, wallets, apiKey, signal, meta, onProgress) {
+  const acc = (await followRpc("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }], apiKey, signal))?.value;
+  const program = acc?.owner;
+  if (!acc || acc.data?.parsed?.type !== "mint" || (program !== TOKEN_PROGRAM && program !== TOKEN22_PROGRAM)) {
+    return { mint, error: program === "11111111111111111111111111111111" ? "Esa dirección es una wallet que no está en la red de nadie que sigues." : "Esa dirección no es el CA de una moneda." };
+  }
+  await meta?.ensure([mint], signal);
+  const hits = [];
+  let done = 0;
+  for (const w of wallets) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    onProgress?.(++done, wallets.length);
+    const ata = await followAta(w.address, mint, program);
+    const txs = await followFetchPage(ata, apiKey, signal);
+    if (!txs.length) continue;
+    const trades = followAnalyze(txs, w.address).trades.filter((t) => t.mint === mint);
+    if (!trades.length) continue;
+    const buys = trades.filter((t) => t.side === "buy"), sells = trades.filter((t) => t.side === "sell");
+    const sum = (list, k) => list.reduce((s, t) => s + (t[k] || 0), 0);
+    hits.push({
+      ...w, partial: txs.length >= 100, buys: buys.length, sells: sells.length,
+      solIn: sum(buys, "sol"), solOut: sum(sells, "sol"), usdIn: sum(buys, "usd"), usdOut: sum(sells, "usd"),
+      bought: sum(buys, "amount"), sold: sum(sells, "amount"),
+      firstTs: Math.min(...trades.map((t) => t.ts)), lastTs: Math.max(...trades.map((t) => t.ts)),
+    });
+  }
+  hits.sort((a, b) => a.firstTs - b.firstTs);
+  return { mint, searched: wallets.length, hits, at: Math.floor(Date.now() / 1000) };
 }
 
 // ─── Follow · helpers ─────────────────────────────────────────────────────────
@@ -2970,6 +3332,7 @@ const FOLLOW_ROLES = {
   deposit:     { label: "Depósito exchange", color: "oklch(0.76 0.10 200)", desc: "Dirección de depósito: todo lo que entra sale hacia un exchange." },
   exchange:    { label: "Exchange / bot",    color: "oklch(0.62 0.02 260)", desc: "Servicio con cientos de movimientos al día: ahí se pierde el rastro." },
   funder:      { label: "Le mandó SOL",      color: "var(--info)",          desc: "Le envió SOL a la raíz." },
+  person:      { label: "Otra persona",      color: "oklch(0.76 0.08 250)", desc: "Wallet de otra persona que también sigues: nunca se mezcla con esta." },
   other:       { label: "Destino",           color: "var(--text-3)",        desc: "Recibió SOL, sin más señales." },
 };
 const FOLLOW_STORE = "follow_people";
@@ -3017,6 +3380,7 @@ function followHue(addr) {
 function followTag(n, rootName, compact) {
   if (n.role === "root") return `Raíz${rootName ? ` · ${rootName}` : ""}`;
   const role = FOLLOW_ROLES[n.role] || FOLLOW_ROLES.other;
+  if (n.role === "person") return n.owner || role.label;
   if (compact) return n.exName || (n.role === "deposit" ? "Depósito" : role.label);
   if (n.members) return `${n.members.length} exchanges${n.lost ? " · sin rastro" : ""}`;
   const parts = [n.exName || (n.viaHub && n.role === "trader" ? "Vía exchange" : n.role === "exchange" ? "Exchange" : role.label)];
@@ -3059,7 +3423,6 @@ function followInsights(person, graph, now) {
   const own   = new Set([person.root, ...(person.aliases || [])]);
   const stats = followWalletStats(person.trades || [], null, now);
   const cands = nodes.filter((n) => n.score != null && !own.has(n.addr)).sort((a, b) => b.score - a.score);
-  const top   = cands[0];
 
   let status;
   const hot = [...own].filter((w) => followWalletStats(person.trades || [], w, now).b24 > 0);
@@ -3069,9 +3432,8 @@ function followInsights(person, graph, now) {
   }
   else if (stats.last) status = { tone: "warn", chip: "en pausa", text: `sin compras desde ${fmtAgo(stats.last, now)}` };
   else status = { tone: "muted", chip: "inactiva", text: "sin compras en 7 días" };
-  if (top && top.score >= 70 && top.buys > 0 && top.lastBuyTs > stats.last) {
-    status = { tone: "warn", chip: status.chip, text: `posible wallet nueva: ${shortAddr(top.addr, 4, 4)}` };
-  }
+  const move = followMove(person, nodes);
+  if (move) status = { tone: "warn", chip: status.chip, text: `posible mudanza a ${shortAddr(move.addr, 4, 4)}` };
 
   const items = [];
   for (const n of cands.filter((c) => c.score >= 50).slice(0, 3)) {
@@ -3797,7 +4159,7 @@ function FollowProfile({ person, graph, node, group, now, tokenName, seenTs, onS
               fontSize: 9.5, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", padding: "2px 8px", borderRadius: 10,
               color: role.color, background: `color-mix(in oklch, ${role.color} 15%, transparent)`, border: `1px solid color-mix(in oklch, ${role.color} 35%, transparent)`,
             }}>
-              {cur.exName || role.label}{isOwn ? ` · ${person.name}` : ""}
+              {cur.exName || role.label}{isOwn ? ` · ${person.name}` : cur.owner ? ` · ${cur.owner}` : ""}
             </span>
             {cur.score != null && !isOwn && (
               <span className="mono" style={{ fontSize: 10.5, color: "var(--text-3)" }}>{followVerdict(cur.score)} que sea suya</span>
@@ -3839,6 +4201,11 @@ function FollowProfile({ person, graph, node, group, now, tokenName, seenTs, onS
                   <IconCheck size={11} style={{ color: role.color, flexShrink: 0, marginTop: 3 }} /> <span>{w}</span>
                 </div>
               ))}
+              {(cur.con || []).map((w, i) => (
+                <div key={`c${i}`} style={{ display: "flex", gap: 7, fontSize: 11.5, lineHeight: 1.45, color: "var(--text-3)", padding: "2px 0" }}>
+                  <IconClose size={10} style={{ color: "var(--warn)", flexShrink: 0, marginTop: 4 }} /> <span>{w}</span>
+                </div>
+              ))}
             </div>
           )}
 
@@ -3865,7 +4232,17 @@ function FollowProfile({ person, graph, node, group, now, tokenName, seenTs, onS
           )}
           {cur.role === "exchange" && cur.lost && (
             <div style={{ fontSize: 11.5, color: "var(--text-3)", marginTop: 12, lineHeight: 1.5 }}>
-              Mueve demasiado volumen para emparejar entradas con salidas: desde aquí el rastro no es confiable.
+              Aquí se pierde el rastro: no se buscaron retiros parecidos porque el depósito tiene más de 72 h, es menor a 1 SOL, o ya se revisó otro exchange en este escaneo.
+            </div>
+          )}
+          {cur.role === "exchange" && !cur.lost && cur.searched != null && (
+            <div style={{ fontSize: 11.5, color: "var(--text-3)", marginTop: 12, lineHeight: 1.5 }}>
+              Se revisaron {cur.searched} retiros de este exchange en las 6 h siguientes al depósito, buscando uno del 90–101 % del monto hacia una wallet nueva.
+            </div>
+          )}
+          {cur.role === "person" && (
+            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 12, lineHeight: 1.5 }}>
+              Es una wallet de <b style={{ fontWeight: 600, color: "var(--text)" }}>{cur.owner}</b>, a quien también sigues: no se le asigna a esta persona.
             </div>
           )}
 
@@ -3899,7 +4276,7 @@ function FollowProfile({ person, graph, node, group, now, tokenName, seenTs, onS
             <button onClick={() => onTrace(cur.addr)} style={linkBtn} title="Abrir en el rastreador de SOL / USDC">Rastrear</button>
           </div>
 
-          {cur.addr !== person.root && cur.role !== "exchange" && cur.role !== "deposit" && (
+          {cur.addr !== person.root && cur.role !== "exchange" && cur.role !== "deposit" && cur.role !== "person" && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
               {isOwn ? (
                 <button onClick={() => onUnalias(cur.addr)} style={linkBtn}>Quitar de sus wallets</button>
@@ -3952,6 +4329,163 @@ function FollowProfile({ person, graph, node, group, now, tokenName, seenTs, onS
   );
 }
 
+// ─── Follow · live feed and CA search ─────────────────────────────────────────
+
+// One live event as a title + detail (used by the "En vivo" list and by browser notifications)
+function followEventText(e, sym) {
+  const w = (a) => shortAddr(a, 4, 4);
+  if (e.type === "buy" || e.type === "sell") {
+    return {
+      title: `${e.name} ${e.type === "buy" ? "compró" : "vendió"} ${sym(e.trade.mint)}`,
+      body: `${fmtAmount(e.trade.sol, e.trade.usd)} con ${w(e.wallet)}${e.own ? "" : " · wallet de su red, sin confirmar"}`,
+    };
+  }
+  if (e.type === "move") return { title: `${e.name} movió ${fmtSol(e.sol)} SOL`, body: `de ${w(e.wallet)} a ${w(e.addr)} · esa wallet queda vigilada 6 h` };
+  if (e.type === "woke") return { title: `${w(e.addr)} empezó a comprar`, body: `recibió SOL de ${e.name} y ya compra` };
+  if (e.type === "switch") return { title: `Posible mudanza de ${e.name}`, body: `${w(e.addr)} recibió su SOL y compra más reciente que sus wallets` };
+  if (e.type === "convergence") return { title: `${e.people.length} personas compraron ${sym(e.mint)}`, body: `${e.people.map((p) => p.name).join(", ")} en ${followDur(Math.max(1, e.spanSec))}` };
+  return { title: e.type, body: "" };
+}
+
+function FollowLive({ events, convergences, rt, auto, notify, onNotify, now, tokenName, onOpen, onHuntToken, onClear }) {
+  const tone  = { buy: "var(--accent-2)", sell: "var(--danger)", move: "var(--warn)", woke: "var(--accent-2)", switch: "var(--warn)", convergence: "var(--info)" };
+  const label = { buy: "COMPRA", sell: "VENTA", move: "ENVÍO", woke: "DESPERTÓ", switch: "MUDANZA", convergence: "COINCIDEN" };
+  return (
+    <>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: rt.connected ? "var(--accent)" : "var(--text-4)", animation: rt.connected ? "pulse-dot 1.6s ease-in-out infinite" : "none" }} />
+        <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text-2)", lineHeight: 1.4 }}>
+          {!auto ? "Tiempo real apagado" : rt.connected ? `Tiempo real · ${rt.wallets} wallet${rt.wallets === 1 ? "" : "s"}` : "Conectando tiempo real…"}
+          <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>una compra o un envío llega en 1–2 s</div>
+        </div>
+        <button onClick={onNotify} title="Avisos del navegador mientras esta pestaña esté abierta"
+          style={{ ...followBtn, padding: "4px 9px", fontSize: 11, color: notify ? "var(--accent-2)" : "var(--text-2)", border: `1px solid ${notify ? "color-mix(in oklch, var(--accent) 45%, transparent)" : "var(--line)"}` }}>
+          {notify ? "Avisos activos" : "Activar avisos"}
+        </button>
+      </div>
+
+      {convergences.length > 0 && (
+        <div style={{ padding: "14px 18px 6px", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ ...followCaps, marginBottom: 8 }}>Coincidencias · 24 h</div>
+          {convergences.slice(0, 5).map((c) => (
+            <div key={c.mint} style={{ padding: "10px 12px", marginBottom: 8, borderRadius: 9, background: "var(--bg-2)", border: "1px solid color-mix(in oklch, var(--info) 32%, var(--line))" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <a href={`https://gmgn.ai/sol/token/${c.mint}`} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 600, textDecoration: "none" }}>{tokenName(c.mint)}</a>
+                <span style={{ fontSize: 11, color: "var(--text-3)" }}>{c.people.length} personas en {followDur(Math.max(1, c.spanSec))}</span>
+                <div style={{ flex: 1 }} />
+                <button onClick={() => onHuntToken(c.mint)} title="Cazar quién más compró temprano esta moneda" style={{ ...followBtn, padding: "3px 8px", fontSize: 11 }}><IconTarget size={11} /> Cazar</button>
+              </div>
+              {c.people.map((p) => (
+                <div key={p.name} style={{ display: "flex", gap: 8, fontSize: 11.5, color: "var(--text-2)", marginTop: 4, alignItems: "baseline" }}>
+                  <span style={{ fontWeight: 500, color: "var(--text)" }}>{p.name}</span>
+                  <span className="mono" style={{ fontSize: 10.5, color: "var(--text-4)" }}>{shortAddr(p.wallet, 4, 4)}</span>
+                  <div style={{ flex: 1 }} />
+                  <span className="mono">{fmtAmount(p.sol, p.usd)}</span>
+                  <span style={{ color: "var(--text-3)" }}>{fmtClock(p.ts)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", padding: "14px 18px 6px" }}>
+        <span style={followCaps}>Actividad de todos</span>
+        <div style={{ flex: 1 }} />
+        {events.length > 0 && <button onClick={onClear} style={{ fontSize: 11, color: "var(--text-3)" }}>Limpiar</button>}
+      </div>
+      {events.length === 0 && (
+        <div style={{ padding: "6px 18px 20px", fontSize: 12, color: "var(--text-3)", lineHeight: 1.55 }}>
+          Compras, envíos de SOL, mudanzas de wallet y coincidencias de la gente que sigues aparecen aquí al instante.
+        </div>
+      )}
+      {events.slice(0, 120).map((e) => {
+        const text = followEventText(e, tokenName);
+        return (
+          <button key={e.key} onClick={() => onOpen(e)} style={{ display: "flex", gap: 9, width: "100%", textAlign: "left", padding: "9px 18px", borderTop: "1px solid var(--line)", alignItems: "flex-start" }}>
+            <span className="mono" style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.05em", width: 66, flexShrink: 0, paddingTop: 2, color: tone[e.type] }}>{label[e.type]}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text.title}</span>
+              <span style={{ display: "block", fontSize: 11, color: "var(--text-3)", lineHeight: 1.4 }}>{text.body}</span>
+            </span>
+            <span style={{ fontSize: 10.5, color: "var(--text-4)", flexShrink: 0, paddingTop: 2 }}>{followDur(Math.max(1, now - e.at))}</span>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+function FollowCA({ ca, recent, now, tokenName, onSearch, onOpen, onHuntToken }) {
+  const r = ca?.result;
+  const err = ca?.error || r?.error;
+  return (
+    <>
+      <div style={{ padding: "14px 18px 12px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ ...followCaps, marginBottom: 6 }}>Buscar por CA</div>
+        <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.5 }}>
+          ¿Quién de la gente que sigues, o de las wallets de su red, compró una moneda? Pega el CA en el buscador de la izquierda.
+        </div>
+        {recent.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+            {recent.map((m) => <button key={m} onClick={() => onSearch(m)} style={{ ...followBtn, padding: "3px 8px", fontSize: 11 }}>{tokenName(m)}</button>)}
+          </div>
+        )}
+      </div>
+
+      {ca?.busy && (
+        <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--text-2)", display: "flex", alignItems: "center", gap: 9 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: "pulse-dot 1.1s ease-in-out infinite" }} />
+          Buscando en las wallets de todos… {ca.done}/{ca.total}
+        </div>
+      )}
+      {err && <div style={{ padding: "16px 18px", fontSize: 12.5, color: "var(--warn)", lineHeight: 1.5 }}>{err}</div>}
+
+      {r && !r.error && (
+        <>
+          <div style={{ padding: "14px 18px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <a href={`https://gmgn.ai/sol/token/${r.mint}`} target="_blank" rel="noreferrer" style={{ fontSize: 15, fontWeight: 600, textDecoration: "none" }}>{tokenName(r.mint)}</a>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => onHuntToken(r.mint)} title="Cazar quién más compró temprano esta moneda" style={{ ...followBtn, padding: "3px 8px", fontSize: 11 }}><IconTarget size={11} /> Cazar</button>
+            </div>
+            <div className="mono" style={{ fontSize: 10.5, color: "var(--text-4)", wordBreak: "break-all", marginTop: 4 }}>{r.mint}</div>
+            <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 8, lineHeight: 1.5 }}>
+              {r.hits.length
+                ? `${r.hits.length} de ${r.searched} wallets la movieron.`
+                : `Nadie la tocó: se revisaron ${r.searched} wallets (las de cada persona y las de su red).`}
+            </div>
+          </div>
+          {r.hits.map((h) => {
+            const left = h.bought > 0 ? Math.max(0, 1 - h.sold / h.bought) : 0;
+            const net = h.solOut - h.solIn;
+            const role = FOLLOW_ROLES[h.role] || FOLLOW_ROLES.other;
+            return (
+              <button key={h.address} onClick={() => onOpen({ pid: h.pid, addr: h.address })} style={{ display: "block", width: "100%", textAlign: "left", padding: "11px 18px", borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{h.name}</span>
+                  <span className="mono" style={{ fontSize: 10.5, color: "var(--text-3)" }}>{shortAddr(h.address, 4, 4)}</span>
+                  {h.role !== "root" && <span className="mono" style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: role.color }}>{role.label}</span>}
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 11, color: left > 0.02 ? "var(--accent-2)" : "var(--text-4)" }}>{left > 0.02 ? `aún tiene ~${Math.round(left * 100)}%` : "ya no tiene"}</span>
+                </div>
+                <div className="mono" style={{ fontSize: 11.5, color: "var(--text-2)", marginTop: 4 }}>
+                  {h.partial ? "≥ " : ""}{h.buys} compra{h.buys === 1 ? "" : "s"} · {fmtAmount(h.solIn, h.usdIn)}
+                  {h.sells > 0 && ` · ${h.sells} venta${h.sells === 1 ? "" : "s"} · ${fmtAmount(h.solOut, h.usdOut)}`}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 3 }}>
+                  primera {fmtClock(h.firstTs)} · última {fmtAgo(h.lastTs, now)}
+                  {h.sells > 0 && h.solIn > 0 && <span style={{ color: net >= 0 ? "var(--accent-2)" : "var(--danger)" }}> · neto {net >= 0 ? "+" : "−"}{fmtSol(Math.abs(net))} SOL</span>}
+                </div>
+              </button>
+            );
+          })}
+        </>
+      )}
+    </>
+  );
+}
+
 // ─── Follow · view ────────────────────────────────────────────────────────────
 
 function followErrorText(e) {
@@ -3993,10 +4527,32 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
   const [form, setForm]     = useState({ name: "", wallet: "" });
   const [formErr, setFormErr] = useState("");
   const [renaming, setRenaming] = useState(null);
+  const [tab, setTab]       = useState("perfil");   // right panel: "perfil" | "vivo" | "ca"
+  const [events, setEvents] = useState(() => { try { return JSON.parse(localStorage.getItem("follow_events") || "[]"); } catch { return []; } });
+  const [unseen, setUnseen] = useState(0);          // live events since "En vivo" was last open
+  const [rt, setRt]         = useState({ connected: false, wallets: 0 });
+  const [notify, setNotify] = useState(() => localStorage.getItem("follow_notify") === "1");
+  const [ca, setCa]         = useState(null);       // CA search: { busy, mint, done, total } | { result } | { error }
+  const [caQuery, setCaQuery] = useState("");
+  const [caRecent, setCaRecent] = useState(() => { try { return JSON.parse(localStorage.getItem("follow_ca_recent") || "[]"); } catch { return []; } });
+  const [extraTick, setExtraTick] = useState(0);
 
   const peopleRef = useRef(people);
   const tokensRef = useRef(tokens);
   const opRef     = useRef(null);                   // the running scan / check: { ctrl, kind }
+  const metaRef   = useRef(null);                   // followMetaCache: token names + imitation rules
+  const pushRef   = useRef(null);
+  const onSigRef  = useRef(null);
+  const rtRef     = useRef(null);
+  const detectorRef = useRef(null);
+  const notifyRef = useRef(notify);
+  const watchedRef = useRef(new Map());             // wallet → { pid, core } subscribed in real time
+  const extraRef  = useRef(new Map());              // wallets that just received money: watched for 6 h
+  const eventKeys = useRef(new Set());
+  const sigsRef   = useRef(new Set());
+  const rateRef   = useRef(new Map());
+  const caAbort   = useRef(null);
+  useEffect(() => { notifyRef.current = notify; localStorage.setItem("follow_notify", notify ? "1" : "0"); }, [notify]);
   useEffect(() => { peopleRef.current = people; followSave(people); }, [people]);
   useEffect(() => { tokensRef.current = tokens; }, [tokens]);
   useEffect(() => { localStorage.setItem("follow_auto", auto ? "1" : "0"); }, [auto]);
@@ -4009,19 +4565,54 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
     setPeople((prev) => prev.map((p) => (p.id === id ? fn(p) : p)));
   }, []);
 
-  const loadTokens = useCallback(async (mints, signal) => {
-    const missing = [...new Set(mints)].filter((m) => !tokensRef.current[m]).slice(0, 300);
-    if (!missing.length) return;
-    try {
-      const meta = await followFetchTokenMeta(missing, apiKey, signal);
-      setTokens((prev) => {
-        const entries = Object.entries({ ...prev, ...meta }).slice(-800);
-        const next = Object.fromEntries(entries);
-        try { localStorage.setItem("follow_tokens", JSON.stringify(next)); } catch { /* cache only */ }
-        return next;
-      });
-    } catch { /* names are a nicety */ }
+  // One token cache for every scan, check and live update (it also decides what is an imitation)
+  const metaOf = useCallback(() => {
+    if (!metaRef.current) metaRef.current = followMetaCache(tokensRef.current, apiKey);
+    return metaRef.current;
   }, [apiKey]);
+  const syncTokens = useCallback(() => {
+    if (!metaRef.current) return;
+    const next = Object.fromEntries(Object.entries(metaRef.current.known).slice(-1200));
+    try { localStorage.setItem("follow_tokens", JSON.stringify(next)); } catch { /* cache only */ }
+    setTokens(next);
+  }, []);
+
+  // Live events: buys, sells, transfers, moves and convergences of everyone, newest first.
+  // `key` makes each one unique, so the websocket and the periodic check never report it twice.
+  const pushEvent = useCallback((ev) => {
+    const key = ev.key || `${ev.type}:${ev.addr || ""}:${ev.at || ""}`;
+    if (eventKeys.current.has(key)) return;
+    eventKeys.current.add(key);
+    const at = followNow();
+    const e = { at, ...ev, key };
+    setEvents((prev) => {
+      const next = [e, ...prev].sort((a, b) => b.at - a.at).slice(0, 300);
+      try { localStorage.setItem("follow_events", JSON.stringify(next)); } catch { /* log only */ }
+      return next;
+    });
+    if (at - e.at < 600) {
+      setUnseen((n) => n + 1);
+      if (notifyRef.current && e.type !== "sell" && typeof Notification !== "undefined" && Notification.permission === "granted") {
+        const text = followEventText(e, (m) => metaRef.current?.known[m]?.symbol || shortAddr(m, 4, 4));
+        try { new Notification(text.title, { body: text.body, tag: key }); } catch { /* notifications are optional */ }
+      }
+    }
+    // Every buy by someone you follow goes through the convergence detector
+    if (e.type === "buy" && e.own && e.trade) {
+      const c = detectorRef.current?.push({ name: e.name, wallet: e.wallet, mint: e.trade.mint, ts: e.trade.ts, sol: e.trade.sol, usd: e.trade.usd, sig: e.trade.sig });
+      if (c) pushRef.current?.({ type: "convergence", key: `conv:${c.mint}:${c.people.length}`, at: c.lastTs, mint: c.mint, people: c.people, spanSec: c.spanSec });
+    }
+  }, []);
+  useEffect(() => { pushRef.current = pushEvent; }, [pushEvent]);
+  useEffect(() => {
+    for (const e of events) eventKeys.current.add(e.key);
+    const since = followNow() - FOLLOW_DAY;
+    const d = followDetector();
+    d.seed(peopleRef.current.flatMap((p) => (p.trades || []).filter((t) => t.side === "buy" && t.ts >= since)
+      .map((t) => ({ name: p.name, wallet: t.wallet, mint: t.mint, ts: t.ts, sol: t.sol, usd: t.usd, sig: t.sig }))));
+    detectorRef.current = d;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const runScan = useCallback(async (p) => {
     if (!apiKey) { setError("API key no configurada — agrega VITE_HELIUS_API_KEY en .env"); return; }
@@ -4031,23 +4622,27 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
     setError("");
     setBusy({ id: p.id, kind: "scan", label: "Empezando…", graph: null });
     try {
+      const others = new Map();
+      for (const q of peopleRef.current) if (q.id !== p.id) for (const w of [q.root, ...(q.aliases || [])]) others.set(w, q.name);
       const res = await followScan(p, apiKey, ctrl.signal, (ev) => {
         if (!ctrl.signal.aborted) setBusy({ id: p.id, kind: "scan", label: ev.label, graph: ev.graph });
-      });
+      }, { meta: metaOf(), others });
+      const move = followMove({ ...p, trades: res.trades }, res.nodes);
       updatePerson(p.id, (old) => ({
         ...old, graph: { nodes: res.nodes, edges: res.edges }, trades: res.trades,
         scannedAt: res.scannedAt, checkedAt: res.scannedAt,
-        alerts: (old.alerts || []).filter((a) => a.kind !== "outflow"),
+        alerts: [...(old.alerts || []).filter((a) => a.kind === "woke"), ...(move ? [{ kind: "switch", ts: move.recvTs, addr: move.addr, buys: move.buys }] : [])],
       }));
-      loadTokens([...res.trades.map((t) => t.mint), ...res.nodes.flatMap((n) => (n.trades || []).map((t) => t.mint))], ctrl.signal);
+      if (move) pushEvent({ type: "switch", key: `switch:${move.addr}:${move.recvTs}`, pid: p.id, name: p.name, addr: move.addr, buys: move.buys });
+      syncTokens();
     } catch (e) { setError(followErrorText(e)); }
     finally {
       if (opRef.current?.ctrl === ctrl) { opRef.current = null; setBusy(null); }
     }
-  }, [apiKey, updatePerson, loadTokens]);
+  }, [apiKey, updatePerson, metaOf, syncTokens, pushEvent]);
 
   const runCheck = useCallback(async (p, signal) => {
-    const r = await followRefresh(p, apiKey, signal);
+    const r = await followRefresh(p, apiKey, signal, { meta: metaOf() });
     updatePerson(p.id, (old) => {
       const seen = new Set((old.alerts || []).map((a) => `${a.kind}:${a.addr}:${a.ts}`));
       const since = r.checkedAt - 7 * FOLLOW_DAY;
@@ -4059,8 +4654,94 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
         checkedAt: r.checkedAt,
       };
     });
-    loadTokens(r.fresh.map((t) => t.mint), signal);
-  }, [apiKey, updatePerson, loadTokens]);
+    // What happened since the last check also goes to the live feed (only if there was a previous check)
+    if (p.checkedAt) {
+      for (const t of r.fresh.slice(0, 40).reverse()) pushEvent({ type: t.side, key: `t:${t.sig}:${t.mint}`, pid: p.id, name: p.name, wallet: t.wallet, own: true, trade: t, at: t.ts });
+    }
+    for (const a of r.alerts) {
+      if (a.kind === "outflow") pushEvent({ type: "move", key: `move:${a.addr}:${a.ts}`, pid: p.id, name: p.name, wallet: a.from, addr: a.addr, sol: a.sol, at: a.ts });
+      else pushEvent({ type: a.kind, key: `${a.kind}:${a.addr}:${a.kind === "switch" ? a.ts : ""}`, pid: p.id, name: p.name, addr: a.addr, buys: a.buys });
+    }
+    syncTokens();
+  }, [apiKey, updatePerson, metaOf, syncTokens, pushEvent]);
+
+  // ── Real time (from Rastro): every watched wallet is subscribed over the Helius websocket ──
+  // Watched: each person's own wallets, plus the wallets of their network that could become theirs.
+  const watched = useMemo(() => {
+    const m = new Map();
+    for (const p of people) {
+      for (const w of [p.root, ...(p.aliases || [])]) if (!m.has(w)) m.set(w, { pid: p.id, core: true });
+      (p.graph?.nodes || [])
+        .filter((n) => followScored(n) && n.buys != null && (n.role === "watch" || n.role === "trader" || (n.score || 0) >= 50))
+        .sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6)
+        .forEach((n) => { if (!m.has(n.addr)) m.set(n.addr, { pid: p.id, core: false }); });
+    }
+    return m;
+  }, [people]);
+  const watchKey = [...watched.keys()].sort().join(",");
+  useEffect(() => { watchedRef.current = watched; }, [watched]);
+
+  useEffect(() => {
+    if (!auto || !apiKey) return;
+    const live = followRealtime(apiKey, (wallet, sig) => onSigRef.current?.(wallet, sig), setRt);
+    rtRef.current = live;
+    return () => { live.close(); rtRef.current = null; };
+  }, [auto, apiKey]);
+  useEffect(() => {
+    const t = followNow();
+    for (const [a, x] of extraRef.current) if (t - x.at > 6 * 3600) extraRef.current.delete(a);
+    rtRef.current?.setWallets([...new Set([...watchKey.split(",").filter(Boolean), ...extraRef.current.keys()])]);
+  }, [watchKey, extraTick, auto, apiKey]);
+
+  // A watched wallet signed or received something: read that one transaction
+  const onSig = async (wallet, sig) => {
+    const hit = watchedRef.current.get(wallet) || extraRef.current.get(wallet);
+    if (!hit || sigsRef.current.has(sig + wallet)) return;
+    sigsRef.current.add(sig + wallet);
+    if (sigsRef.current.size > 4000) sigsRef.current = new Set([...sigsRef.current].slice(-2000));
+    if (!hit.core) {
+      // A wallet watched in passing that moves like a bot is dropped
+      const t = Date.now(), hits = (rateRef.current.get(wallet) || []).filter((x) => t - x < 60000);
+      hits.push(t); rateRef.current.set(wallet, hits);
+      if (hits.length > 20) { extraRef.current.delete(wallet); setExtraTick((n) => n + 1); return; }
+    }
+    const p = peopleRef.current.find((x) => x.id === hit.pid);
+    if (!p) return;
+    let an;
+    try {
+      const tx = await followFetchBySig(sig, apiKey);
+      if (!tx) return;
+      an = await followRead([tx], wallet, metaOf());
+    } catch { return; }
+    const own = wallet === p.root || (p.aliases || []).includes(wallet);
+    const have = new Set((p.trades || []).map((t) => t.sig + t.mint));
+    const fresh = an.trades.filter((t) => !have.has(t.sig + t.mint));
+    if (fresh.length) {
+      const buys = fresh.filter((t) => t.side === "buy");
+      const node = p.graph?.nodes.find((n) => n.addr === wallet);
+      updatePerson(p.id, (old) => (own
+        ? { ...old, trades: [...fresh.map((t) => ({ ...t, wallet })), ...(old.trades || [])].slice(0, 400) }
+        : { ...old, graph: old.graph && { ...old.graph, nodes: old.graph.nodes.map((n) => (n.addr !== wallet ? n : {
+            ...n, buys: (n.buys || 0) + buys.length, sells: (n.sells || 0) + fresh.length - buys.length,
+            lastBuyTs: buys.length ? Math.max(n.lastBuyTs || 0, ...buys.map((t) => t.ts)) : n.lastBuyTs,
+            firstBuyTs: n.firstBuyTs || buys[0]?.ts || 0, role: n.role === "watch" && buys.length ? "trader" : n.role,
+            trades: [...fresh, ...(n.trades || [])].slice(0, 12),
+          })) } }));
+      if (!own && buys.length && !(node?.buys > 0)) pushEvent({ type: "woke", key: `woke:${wallet}:`, pid: p.id, name: p.name, addr: wallet, buys: buys.length });
+      for (const t of fresh) pushEvent({ type: t.side, key: `t:${t.sig}:${t.mint}`, pid: p.id, name: p.name, wallet, own, trade: t, at: t.ts });
+      syncTokens();
+    }
+    if (!hit.core) return;
+    for (const f of an.flows.values()) {
+      for (const e of f.ev) {
+        if (e.dir !== "out" || e.sol < FOLLOW_EDGE_SOL) continue;
+        // Start watching the receiver right away: its first buy will arrive live too
+        if (!watchedRef.current.has(f.addr)) { extraRef.current.set(f.addr, { pid: p.id, core: false, at: followNow() }); setExtraTick((n) => n + 1); }
+        pushEvent({ type: "move", key: `move:${f.addr}:${e.ts}`, pid: p.id, name: p.name, wallet, addr: f.addr, sol: e.sol, at: e.ts });
+      }
+    }
+  };
+  useEffect(() => { onSigRef.current = onSig; });
 
   // Light re-check of everyone, only while this view is open and the tab is visible
   useEffect(() => {
@@ -4155,6 +4836,51 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
     updatePerson(person.id, () => next);
   };
 
+  // Search box: a wallet that is in someone's network jumps to it; anything else is searched as a CA
+  const runSearch = async (raw) => {
+    const q = (raw || "").trim();
+    if (!q) return;
+    if (!isSolAddress(q)) { setCa({ error: "Eso no parece un CA. Pega la dirección completa de la moneda." }); setTab("ca"); return; }
+    for (const p of peopleRef.current) {
+      const own = p.root === q || (p.aliases || []).includes(q);
+      if (own || p.graph?.nodes.some((n) => n.addr === q)) { select(p.id); setNodeSel(p.root === q ? null : q); setTab("perfil"); return; }
+    }
+    const wallets = [], seen = new Set();
+    const add = (address, p, role) => { if (!seen.has(address)) { seen.add(address); wallets.push({ address, pid: p.id, name: p.name, role }); } };
+    for (const p of peopleRef.current) { add(p.root, p, "root"); (p.aliases || []).forEach((a) => add(a, p, "alias")); }
+    for (const p of peopleRef.current) for (const n of p.graph?.nodes || []) if (followScored(n) && n.side !== "in") add(n.addr, p, n.role);
+    caAbort.current?.abort();
+    const ctrl = new AbortController();
+    caAbort.current = ctrl;
+    setTab("ca");
+    setCa({ busy: true, mint: q, done: 0, total: Math.min(60, wallets.length) });
+    try {
+      const result = await followSearchMint(q, wallets.slice(0, 60), apiKey, ctrl.signal, metaOf(), (done, total) => setCa((c) => (c?.busy && c.mint === q ? { ...c, done, total } : c)));
+      setCa({ result, mint: q });
+      syncTokens();
+      if (!result.error) setCaRecent((prev) => { const next = [q, ...prev.filter((m) => m !== q)].slice(0, 6); localStorage.setItem("follow_ca_recent", JSON.stringify(next)); return next; });
+    } catch (e) { if (e.name !== "AbortError") setCa({ error: followErrorText(e), mint: q }); }
+  };
+  const pick = (addr) => { setNodeSel(addr); setTab("perfil"); };
+  const openTab = (k) => { setTab(k); if (k === "vivo") setUnseen(0); };
+  const openEvent = (e) => {
+    if (!e.pid || !peopleRef.current.some((p) => p.id === e.pid)) return;
+    select(e.pid);
+    setNodeSel(e.type === "buy" || e.type === "sell" ? (e.own ? null : e.wallet) : e.addr || null);
+    setTab("perfil");
+  };
+  const toggleNotify = () => {
+    if (notify) { setNotify(false); return; }
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") setNotify(true);
+    else Notification.requestPermission().then((perm) => setNotify(perm === "granted"));
+  };
+  const convergences = useMemo(() => {
+    const since = now - FOLLOW_DAY;
+    return followConvergences(people.flatMap((p) => (p.trades || []).filter((t) => t.side === "buy" && t.ts >= since)
+      .map((t) => ({ name: p.name, wallet: t.wallet, mint: t.mint, ts: t.ts, sol: t.sol, usd: t.usd, sig: t.sig }))));
+  }, [people, now]);
+
   const names = useMemo(() => {
     const m = new Map();
     for (const p of people) {
@@ -4198,6 +4924,15 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
             cursor: form.wallet.trim() ? "pointer" : "default", transition: "all 140ms ease",
           }}>Seguir</button>
           {formErr && <div style={{ fontSize: 11.5, color: "var(--warn)", lineHeight: 1.4 }}>{formErr}</div>}
+        </form>
+
+        <form onSubmit={(e) => { e.preventDefault(); runSearch(caQuery); }} style={{ padding: "14px 16px 16px", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ ...followCaps, marginBottom: 8 }}>Buscar CA o wallet</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={caQuery} onChange={(e) => setCaQuery(e.target.value)} placeholder="¿Quién compró este CA?" spellCheck={false}
+              className="mono" style={{ ...inputStyle, fontSize: 11.5, padding: "8px 10px", minWidth: 0 }} />
+            <button type="submit" title="Buscar entre la gente que sigues" style={{ ...followBtn, padding: "0 10px", flexShrink: 0 }}><IconSearch size={12} /></button>
+          </div>
         </form>
 
         <div style={{ ...followCaps, padding: "14px 16px 8px" }}>Siguiendo{people.length ? ` · ${people.length}` : ""}</div>
@@ -4251,8 +4986,8 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
         <div style={{ padding: "12px 16px", borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10 }}>
           <Toggle value={auto} onChange={setAuto} size={16} />
           <div style={{ fontSize: 11.5, color: "var(--text-2)", lineHeight: 1.35 }}>
-            Revisar compras cada 3 min
-            <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>solo con esta vista abierta</div>
+            Tiempo real y revisión cada 3 min
+            <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>{!auto ? "apagado" : rt.connected ? `en vivo · ${rt.wallets} wallet${rt.wallets === 1 ? "" : "s"}` : "conectando…"}</div>
           </div>
         </div>
       </aside>
@@ -4333,13 +5068,14 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
                   <div key={`${a.kind}:${a.addr}:${a.ts}`} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, color: "var(--text-2)" }}>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: a.kind === "woke" ? "var(--accent)" : "var(--warn)", flexShrink: 0 }} />
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      {a.kind === "woke"
-                        ? <><b className="mono" style={{ fontWeight: 500, color: "var(--text)" }}>{shortAddr(a.addr, 4, 4)}</b> empezó a comprar ({a.buys} compra{a.buys > 1 ? "s" : ""}) {fmtAgo(a.ts, now)}.</>
-                        : <>Sacó <b style={{ fontWeight: 600, color: "var(--text)" }}>{fmtSol(a.sol)} SOL</b> hacia <b className="mono" style={{ fontWeight: 500, color: "var(--text)" }}>{shortAddr(a.addr, 4, 4)}</b> {fmtAgo(a.ts, now)}, y esa wallet aún no está en el mapa.</>}
+                      {a.kind === "woke" && <><b className="mono" style={{ fontWeight: 500, color: "var(--text)" }}>{shortAddr(a.addr, 4, 4)}</b> empezó a comprar ({a.buys} compra{a.buys > 1 ? "s" : ""}) {fmtAgo(a.ts, now)}.</>}
+                      {a.kind === "switch" && <>Posible mudanza: <b className="mono" style={{ fontWeight: 500, color: "var(--text)" }}>{shortAddr(a.addr, 4, 4)}</b> recibió su SOL, compró después ({a.buys} compra{a.buys > 1 ? "s" : ""}) y su última compra es más reciente que la de sus wallets.</>}
+                      {a.kind === "outflow" && <>Sacó <b style={{ fontWeight: 600, color: "var(--text)" }}>{fmtSol(a.sol)} SOL</b> hacia <b className="mono" style={{ fontWeight: 500, color: "var(--text)" }}>{shortAddr(a.addr, 4, 4)}</b> {fmtAgo(a.ts, now)}, y esa wallet aún no está en el mapa.</>}
                     </span>
-                    {a.kind === "woke"
-                      ? <button onClick={() => setNodeSel(a.addr)} style={{ ...followBtn, padding: "3px 9px" }}>Ver</button>
-                      : <button onClick={() => runScan(person)} style={{ ...followBtn, padding: "3px 9px" }}>Re-escanear</button>}
+                    {a.kind === "outflow"
+                      ? <button onClick={() => runScan(person)} style={{ ...followBtn, padding: "3px 9px" }}>Re-escanear</button>
+                      : <button onClick={() => pick(a.addr)} style={{ ...followBtn, padding: "3px 9px" }}>Ver</button>}
+                    {a.kind === "switch" && <button onClick={() => { setAlias(a.addr, true); updatePerson(person.id, (o) => ({ ...o, alerts: (o.alerts || []).filter((x) => x !== a) })); }} style={{ ...followBtn, padding: "3px 9px", color: "var(--accent-2)" }}>Es su wallet</button>}
                     <button title="Descartar" onClick={() => updatePerson(person.id, (o) => ({ ...o, alerts: (o.alerts || []).filter((x) => x !== a) }))}
                       style={{ color: "var(--text-3)", display: "grid", placeItems: "center", width: 20, height: 20 }}><IconClose size={10} /></button>
                   </div>
@@ -4349,7 +5085,7 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
 
             {graph ? (
               <FollowGraph
-                graph={shown} mode={mode} selected={nodeSel} onSelect={setNodeSel}
+                graph={shown} mode={mode} selected={nodeSel} onSelect={pick}
                 names={names} rootName={person.name} viewCmd={viewCmd}
                 busyLabel={scanning ? busy.label : null} height="clamp(440px, calc(100vh - 236px), 860px)"
               />
@@ -4366,7 +5102,7 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
 
             {(person.trades || []).length > 0 || graph ? (
               <FollowActivity person={person} insights={insights} now={now} range={range} setRange={setRange}
-                tokenName={tokenName} onSelect={setNodeSel} onHuntToken={onHuntToken} />
+                tokenName={tokenName} onSelect={pick} onHuntToken={onHuntToken} />
             ) : null}
           </>
         )}
@@ -4375,13 +5111,40 @@ function FollowView({ active, apiKey, seed, viewSwitch, onTrace, onHuntToken }) 
       {/* ── Right: the selected wallet ── */}
       {person && (
         <aside style={{ width: "clamp(296px, 21vw, 364px)", flexShrink: 0, overflowY: "auto", background: "var(--bg)", borderLeft: "1px solid var(--line)" }}>
-          <FollowProfile
-            person={person} graph={graph} node={selNode} group={selGroup} now={now} tokenName={tokenName} seenTs={seenTs}
-            onSelect={setNodeSel}
-            onAlias={(a) => setAlias(a, true)} onUnalias={(a) => setAlias(a, false)}
-            onFollowNew={(a) => addPerson("", a)}
-            onTrace={onTrace}
-          />
+          <div style={{ display: "flex", gap: 2, padding: "10px 14px", borderBottom: "1px solid var(--line)", position: "sticky", top: 0, background: "var(--bg)", zIndex: 3 }}>
+            {[["perfil", "Perfil"], ["vivo", "En vivo"], ["ca", "CA"]].map(([k, label]) => (
+              <button key={k} onClick={() => openTab(k)} style={{
+                flex: 1, padding: "6px 0", borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+                background: tab === k ? "var(--surface-2)" : "transparent", color: tab === k ? "var(--text)" : "var(--text-3)",
+              }}>
+                {k === "vivo" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: rt.connected ? "var(--accent)" : "var(--text-4)" }} />}
+                {label}
+                {k === "vivo" && unseen > 0 && tab !== "vivo" && (
+                  <span className="mono" style={{ fontSize: 9.5, fontWeight: 600, padding: "0 5px", borderRadius: 8, background: "var(--accent)", color: "var(--accent-ink)" }}>{unseen > 99 ? "99+" : unseen}</span>
+                )}
+              </button>
+            ))}
+          </div>
+          {tab === "perfil" && (
+            <FollowProfile
+              person={person} graph={graph} node={selNode} group={selGroup} now={now} tokenName={tokenName} seenTs={seenTs}
+              onSelect={pick}
+              onAlias={(a) => setAlias(a, true)} onUnalias={(a) => setAlias(a, false)}
+              onFollowNew={(a) => addPerson("", a)}
+              onTrace={onTrace}
+            />
+          )}
+          {tab === "vivo" && (
+            <FollowLive
+              events={events} convergences={convergences} rt={rt} auto={auto} notify={notify} onNotify={toggleNotify}
+              now={now} tokenName={tokenName} onOpen={openEvent} onHuntToken={onHuntToken}
+              onClear={() => { setEvents([]); localStorage.removeItem("follow_events"); }}
+            />
+          )}
+          {tab === "ca" && (
+            <FollowCA ca={ca} recent={caRecent} now={now} tokenName={tokenName} onSearch={runSearch} onOpen={openEvent} onHuntToken={onHuntToken} />
+          )}
         </aside>
       )}
     </div>
@@ -5098,7 +5861,7 @@ export default function App() {
           display: "flex", alignItems: "center", gap: 14,
           fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-4)", letterSpacing: "0.06em",
         }}>
-          <span>KOL Wallet Hunter · v2</span>
+          <span>KOL Wallet Hunter · edición definitiva</span>
           <span style={{ flex: 1 }} />
           <span>Helius · 1.1s rate</span>
         </footer>

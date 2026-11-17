@@ -12,6 +12,8 @@ npm run build   # production build
 
 ## What this project does
 
+This is the **definitive edition**: Wallet Tracker merged with [Rastro](https://github.com/cchurtado18/Rastro) (git history of both is kept; Rastro's `main` is a merge parent). Rastro was a Node server + CLI; its best logic was ported into this browser app and its server, CLI and test suite were not carried over. See README.md for what came from each.
+
 Web app that finds Solana wallet intersections to identify KOLs doing self-shill.
 Logic: KOL buys token BEFORE shilling → their wallet appears as early buyer across multiple CAs → intersection = candidate wallets.
 
@@ -86,13 +88,14 @@ Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hop
 
 **Engine**
 - `followSlot` — one shared serial throttle (`FOLLOW_GAP_MS` = 450 ms) for every Follow request; `followFetchPage` retries 429 with backoff.
-- `followScan(person, apiKey, signal, onProgress)` — full scan, ~35 calls / ~25 s. Root: up to 6 pages (7 days). Then breadth-first over outgoing SOL, capped by `FOLLOW_CAPS`, one page per wallet. Returns `{ nodes, edges, trades, scannedAt }`.
-- `followRefresh(person, …)` — light check (1 call per own wallet + up to 3 candidates): new trades, outflows to wallets not on the map, quiet candidates that started buying. Runs every ~3 min only while the view is open, the tab is visible, and the toggle is on.
+- `followScan(person, apiKey, signal, onProgress, { meta, others })` — full scan, 35–60 calls / 25–40 s. Root: up to 6 pages (7 days). Then breadth-first over outgoing SOL, capped by `FOLLOW_CAPS`, one page per wallet. `others` (wallet → name of other followed people) become role `person` and are never assigned to this person. Returns `{ nodes, edges, trades, scannedAt }`.
+- `followRead(txs, wallet, meta)` — `followAnalyze` minus tokens that are not trading. Always read wallets through this, with the shared `followMetaCache` (`metaOf()` in `FollowView`).
+- `followRefresh(person, …, { meta })` — light check: reads every own wallet back to the previous check (up to 5 pages, so nothing is missed while the app was closed) plus up to 3 candidates. Reports new trades, outflows to wallets not on the map, quiet candidates that started buying, and a possible move (`followMove`). Runs every ~3 min only while the view is open, the tab is visible, and the toggle is on.
 - `followScore(node, ctx)` — 1–99 "is this wallet theirs" score; every point pushes a reason into `node.why`. Keep it explainable.
 
-**Node roles** (`FOLLOW_ROLES`): `root`, `alias` (user-confirmed), `funder` (sent SOL to root), `bridge` (forwards ≥50%), `deposit` (pass-through into an exchange), `exchange` (≥100 tx in <12 h: trail lost), `distributor` (pays ≥8 or collects from ≥10 wallets at human pace), `trader` (received SOL and trades), `watch` (received ≥1 SOL, no trades yet), `sibling` (feeds the same private pass-through address as the root — typically a shared exchange deposit address, the strongest same-owner signal), `other`.
+**Node roles** (`FOLLOW_ROLES`): `root`, `alias` (user-confirmed), `person` (wallet of someone else you follow), `funder` (sent SOL to root), `bridge` (forwards ≥50%), `deposit` (pass-through into an exchange), `exchange` (≥100 tx in <12 h: trail lost), `distributor` (pays ≥8 or collects from ≥10 wallets at human pace), `trader` (received SOL and trades), `watch` (received ≥1 SOL, no trades yet), `sibling` (feeds the same private pass-through address as the root — typically a shared exchange deposit address, the strongest same-owner signal), `other`.
 
-**Thresholds:** `FOLLOW_DUST_SOL` 0.05 (fees/tips/rebates ignored), `FOLLOW_EDGE_SOL` 0.5 (minimum to draw/follow a link), `FOLLOW_TRADE_SOL` 0.005 (below = rent/fees, not a trade).
+**Thresholds:** `FOLLOW_DUST_SOL` 0.05 (fees/tips/rebates ignored), `FOLLOW_EDGE_SOL` 0.5 (minimum to draw/follow a link), `FOLLOW_TRADE_SOL` 0.01 / `FOLLOW_TRADE_USD` 1 (below = dust, not a trade).
 
 **State / storage**
 ```js
@@ -100,13 +103,25 @@ Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hop
 [{ id, name, root, aliases: [], addedAt, seenTs, scannedAt, checkedAt,
    graph: { nodes, edges },
    trades: [{ sig, ts, side, mint, amount, sol, usd, wallet }],  // 7 days, max 400
-   alerts: [{ kind: "outflow" | "woke", ts, addr, sol?, buys? }] }]
-// also: "follow_sel" (open person), "follow_auto" ("0" = off), "follow_tokens" ({ mint: { symbol, name } })
+   alerts: [{ kind: "outflow" | "woke" | "switch", ts, addr, sol?, buys? }] }]
+// "follow_events": live feed, newest first, max 300 — { key, type: "buy" | "sell" | "move" | "woke" | "switch" | "convergence", at, pid, name, … }
+// also: "follow_sel" (open person), "follow_auto" ("0" = real time and checks off), "follow_notify" ("1" = browser notifications),
+//       "follow_tokens" ({ mint: { symbol, name } }), "follow_ca_recent" (last 6 CA searches)
 ```
 
-**UI:** `FollowGraph` (SVG; `followLayout` does "layers" and "radial"; pan by drag, zoom with ⌘/ctrl + wheel or the buttons; the view is derived from the layout until the user pans; it draws `followCollapse(graph)`, which merges dead-end exchanges under one parent into a single node — display only, the stored graph keeps every wallet), `FollowActivity` (headline, per-wallet cards, `FollowTimeline`, token table with a "Cazar" hand-off), `FollowProfile` (selected wallet: score, reasons, flows, "Es su wallet").
+**UI:** `FollowGraph` (SVG; `followLayout` does "layers" and "radial"; pan by drag, zoom with ⌘/ctrl + wheel or the buttons; the view is derived from the layout until the user pans; it draws `followCollapse(graph)`, which merges dead-end exchanges under one parent into a single node — display only, the stored graph keeps every wallet), `FollowActivity` (headline, per-wallet cards, `FollowTimeline`, token table with a "Cazar" hand-off), `FollowProfile` (selected wallet: score, reasons for and against, flows, "Es su wallet"). The right panel has three tabs: Perfil, En vivo (`FollowLive`: real-time status, convergences of the last 24 h, the event feed) and CA (`FollowCA`: results of the sidebar search box).
 
 **Hand-offs:** hunt results row → `onFollow` → `followSeed`; `#seguir=<wallet>&nombre=<name>` in the URL opens Follow and adds that wallet; Follow → `onTrace` opens the Tracer; token row "Cazar" → `huntToken(mint)` fills a CA entry.
+
+### Ported from Rastro
+
+- **Real time** — `followRealtime(apiKey, onSig, onStatus)`: one `logsSubscribe` per watched wallet on the Helius websocket, with reconnect. Watched = every person's own wallets (`core`) + up to 6 network wallets per person that could become theirs + receivers of a fresh transfer for 6 h (`extraRef`). `onSig` in `FollowView` reads that one transaction (`followFetchBySig`), updates the person, and calls `pushEvent`.
+- **Events** — `pushEvent` is the single entry point for the live feed, browser notifications and the convergence detector. Every event has a unique `key`, so the websocket and the periodic check never report the same thing twice.
+- **Convergence** — `followConvergences` / `followDetector`: 2+ different people buying the same mint within 30 min (`FOLLOW_CONVERGE`). One person with two wallets counts once.
+- **Move** — `followMove(person, nodes)`: a `trader` that received the person's SOL, bought after receiving, and bought more recently than every own wallet. It raises a `switch` alert; the user confirms ("Es su wallet"). It is never assigned automatically.
+- **Via exchange** — for an `exchange` node whose first page does not reach back to the deposit: `followExchangeWithdrawals` reads the next `FOLLOW_CEX.windowH` hours in 30-min slices using `gte-time` / `lte-time` (up to 26 calls). A withdrawal of 90–101% to a wallet with ≤3 earlier transactions is a match; exactly one match that then bought gets `single`. Only deposits ≤72 h old and ≥1 SOL, one exchange per scan (`FOLLOW_CAPS.cexSearches`).
+- **Not trading** — `followNotTrade(mint, info)`: `"fake"` (copies the first 6 chars of a known mint, or takes its symbol while posing as it) is read as the plain transfer it was; `"park"` (stables, staked SOL) is ignored. `FOLLOW_KNOWN` mints were verified on chain.
+- **CA search** — `followSearchMint`: derives each wallet's token account for the mint (`followAta`, works for Token and Token-2022) and reads only that account's history, 1 call per wallet, max 60 wallets.
 
 ## What NOT to do
 
