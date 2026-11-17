@@ -45,8 +45,10 @@ Las dos vistas se conectan: desde un resultado de Cazar puedes seguir a esa wall
 | Emparejar retiros de un exchange | Puntaje explicado de cada wallet |
 | Coincidencias entre personas | Wallets hermanas por depósito compartido |
 | Búsqueda por CA | Distribuidores y depósitos de exchange |
-| Filtro de imitaciones y polvo | Lectura de compras por cambio de balance |
+| Filtro de imitaciones y polvo | Rastreador de SOL/USDC y lista de vigiladas |
 | "Otra persona" nunca se mezcla | Tabla de tokens, línea de tiempo, perfil |
+
+Los dos proyectos ya leían las compras por cambio de balance, no por la etiqueta que les pone Helius.
 
 ## Lo que cambió respecto a Rastro
 
