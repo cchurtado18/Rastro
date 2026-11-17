@@ -8,11 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 export PATH="/opt/homebrew/bin:$PATH"  # required before npm commands
 npm run dev     # start dev server → http://localhost:5173
 npm run build   # production build
+npm test        # engine tests (node:test, no network) — run after touching src/engine.js or src/follow-model.js
+npm run lint    # 7 react-hooks findings in the hunt code of App.jsx predate the merge; add none
+npm run watch   # background watcher (Node): alerts on the Mac / Telegram with the browser closed
 ```
 
 ## What this project does
 
-This is the **definitive edition**: Wallet Tracker merged with [Rastro](https://github.com/cchurtado18/Rastro) (git history of both is kept; Rastro's `main` is a merge parent). Rastro was a Node server + CLI; its best logic was ported into this browser app and its server, CLI and test suite were not carried over. See README.md for what came from each.
+This is the **definitive edition**: Wallet Tracker merged with [Rastro](https://github.com/cchurtado18/Rastro) (git history of both is kept; Rastro's `main` is a merge parent). Rastro was a Node server + CLI; its best logic was ported into this browser app. Its server and CLI were not carried over; `watcher/watch.mjs` covers the "keep watching with the browser closed" part. See README.md for what came from each.
 
 Web app that finds Solana wallet intersections to identify KOLs doing self-shill.
 Logic: KOL buys token BEFORE shilling → their wallet appears as early buyer across multiple CAs → intersection = candidate wallets.
@@ -25,14 +28,33 @@ The app has two top-level views, switched by `ViewSwitch` (state `view` in `App`
 
 ## Architecture
 
-Single-file React app: **all logic lives in `src/App.jsx`**. No backend. Helius API called directly from browser. localStorage for persistence.
+No backend: the browser calls Helius directly and persists to localStorage. The code was one file until the user asked to split it (2026-11); keep this split:
 
-**Helius endpoint:** `GET /v0/addresses/{MINT}/transactions?type=SWAP&limit=100`
-- Paginated via `before` cursor (last tx signature). Safety cap: 30 pages max.
-- Rate limit: 1100ms sleep between pages; 3 retries with 3s backoff on 429.
+| File | What lives there |
+|---|---|
+| `src/engine.js` | Both engines, no React and no DOM: Cazar (token reads, buyer extraction, bundles, tracer) and Seguir (`follow*`). Also runs in Node. |
+| `src/follow-model.js` | Seguir view model: roles, formatting, insights, map layout, backup/restore. Pure functions. |
+| `src/ui.jsx` | Icons, `Toggle`, `Brand` — shared by both views. |
+| `src/Follow.jsx` | The Seguir view (`FollowView`) and `ViewSwitch`. |
+| `src/App.jsx` | The Cazar view and the app shell. `HELIUS_API_KEY` is read here and passed down. |
+| `tests/engine.test.js` | Engine tests with hand-built transactions. |
+| `watcher/watch.mjs` | Node watcher: imports `src/engine.js`, reads an exported backup, alerts via osascript / Telegram. |
+
+Anything the tests or the watcher need must stay importable from Node: no `import.meta.env`, no `localStorage` at module load, no JSX in `engine.js` / `follow-model.js`.
+
+**Reading a token (Cazar)** — `fetchAllSwaps(mint, …, { windowSecs })`:
+- `GET /v0/addresses/{MINT}/transactions?limit=100&sort-order=asc&gte-slot=…` — **no `type` filter**, read forward from the token's first transaction (bonding-curve buys are already in the mint's own history).
+- Ascending order has no cursor: the next page asks `gte-slot` = last slot seen and drops repeats.
+- Stops when it is `windowSecs` past the first buy, when history ends, or at `HUNT_MAX_PAGES` (60). A hot launch does ~250–450 tx/min, so the cap may cover only its first minutes: `coveredSecs` on the CA status tells the user.
+- 1100ms sleep between pages; retries with backoff on 429.
+- Measured on real tokens: a `type=SWAP` filter lost 72–85% of early buyers. Do not bring it back.
+
+**Reverse mode** checks each primary buyer with `checkWalletsBatch`: it derives the wallet's token account for the mint (`followAta`) and reads only that account (1 call per wallet).
+
+**Bundles, tracer, volume bots** (`detectBundles`, `traceWalletChain`, `fetchWalletUniqueMints`) read wallets through `followAnalyze`, so the SOL a bot-routed trade sends to a pool is never taken for a transfer.
 
 **Buyer detection flow** (`extractBuyers`):
-1. Filter txs by timestamp window (from first swap of the token)
+1. Filter txs by timestamp window (from the token's first buy: `mintFirstTs`)
 2. Skip feePayer if in BLACKLIST (DEX routers / program addresses)
 3. Require `tokenTransfers[].toUserAccount` received the token mint
 4. Calculate `solSpent = nativeTransfers from feePayer + WSOL tokenTransfers from feePayer × 1e9`
@@ -68,7 +90,7 @@ savedWallets: {}  // localStorage "kol_saved_wallets", {address: label}
 
 ## Launchpad detection
 
-`detectLaunchpad(txs)` uses Helius's native `tx.source` field (already parsed: `PUMP_FUN`, `RAYDIUM`, `ORCA`, `METEORA`, `JUPITER`, `MOONSHOT`, etc.). Takes the most frequent non-UNKNOWN source.
+`detectLaunchpad(txs)` uses Helius's native `tx.source` field (`PUMP_FUN`, `PUMP_AMM`, `RAYDIUM`, `RAYDIUM_LAUNCHLAB`, `ORCA`, `METEORA`, `JUPITER`, `MOONSHOT`, etc.). Takes the most frequent source that has an entry in `SOURCE_LABELS`; `SYSTEM_PROGRAM` (bot-routed trades) says nothing and is not counted.
 
 `SOURCE_LABELS` maps source → `{ label, color, bg, emoji }` for UI badges.
 
@@ -82,7 +104,7 @@ Expanded set of program addresses (DEX routers, AMM pools, system programs) that
 
 ## Follow view ("Seguir")
 
-Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hops), rank the wallets that look like theirs, and track buys/sells across their confirmed wallets. All code sits between `// ─── Follow · chain analysis` and `// ─── TweaksPanel` in `src/App.jsx`. `FollowView` stays mounted (hidden with `display: none`) so a running scan survives switching views.
+Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hops), rank the wallets that look like theirs, and track buys/sells across their confirmed wallets. Engine in `src/engine.js`, view model in `src/follow-model.js`, UI in `src/Follow.jsx`. `FollowView` stays mounted (hidden with `display: none`) so a running scan survives switching views.
 
 **Trades are read from balance changes, never from Helius `type`.** Helius labels most bot-routed trades (Axiom, Photon, etc.) as `TRANSFER` / `SYSTEM_PROGRAM`; a `type=SWAP` filter returned 15 of ~170 trades on the test wallet. `followFetchPage` therefore requests with no type filter and `followAnalyze(txs, wallet)` classifies each tx from `accountData`: token up + SOL/stable down = buy, token down + SOL/stable up = sell, no token change = money flow to/from a counterparty.
 
@@ -91,7 +113,11 @@ Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hop
 - `followScan(person, apiKey, signal, onProgress, { meta, others })` — full scan, 35–60 calls / 25–40 s. Root: up to 6 pages (7 days). Then breadth-first over outgoing SOL, capped by `FOLLOW_CAPS`, one page per wallet. `others` (wallet → name of other followed people) become role `person` and are never assigned to this person. Returns `{ nodes, edges, trades, scannedAt }`.
 - `followRead(txs, wallet, meta)` — `followAnalyze` minus tokens that are not trading. Always read wallets through this, with the shared `followMetaCache` (`metaOf()` in `FollowView`).
 - `followRefresh(person, …, { meta })` — light check: reads every own wallet back to the previous check (up to 5 pages, so nothing is missed while the app was closed) plus up to 3 candidates. Reports new trades, outflows to wallets not on the map, quiet candidates that started buying, and a possible move (`followMove`). Runs every ~3 min only while the view is open, the tab is visible, and the toggle is on.
-- `followScore(node, ctx)` — 1–99 "is this wallet theirs" score; every point pushes a reason into `node.why`. Keep it explainable.
+- `followScore(node, ctx)` — 1–99 "is this wallet theirs" score; every point pushes a reason into `node.why` (and reasons against into `node.con`). Keep it explainable.
+- `followMergeGraph(prev, next, now)` — the map adds up across scans: wallets a new scan no longer reaches are kept 7 days (`kept: true`, drawn fainter) while they still hang from a wallet on the new map.
+- `followPerformance(trades, prices)` + `followFetchPrices` (DexScreener, USD price ÷ SOL's USD price) — realised and open PnL, hit rate, median hold, over the 7 days of trades on record.
+- Token hand-overs: `followAnalyze` records tokens sent with nothing coming back as `flow.tok`; the receiver enters the map even with no SOL moved and scores +16.
+- A person stored without a map (reload mid-scan, restored backup) is scanned when opened, once per session (`scanTried`).
 
 **Node roles** (`FOLLOW_ROLES`): `root`, `alias` (user-confirmed), `person` (wallet of someone else you follow), `funder` (sent SOL to root), `bridge` (forwards ≥50%), `deposit` (pass-through into an exchange), `exchange` (≥100 tx in <12 h: trail lost), `distributor` (pays ≥8 or collects from ≥10 wallets at human pace), `trader` (received SOL and trades), `watch` (received ≥1 SOL, no trades yet), `sibling` (feeds the same private pass-through address as the root — typically a shared exchange deposit address, the strongest same-owner signal), `other`.
 
@@ -106,7 +132,10 @@ Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hop
    alerts: [{ kind: "outflow" | "woke" | "switch", ts, addr, sol?, buys? }] }]
 // "follow_events": live feed, newest first, max 300 — { key, type: "buy" | "sell" | "move" | "woke" | "switch" | "convergence", at, pid, name, … }
 // also: "follow_sel" (open person), "follow_auto" ("0" = real time and checks off), "follow_notify" ("1" = browser notifications),
-//       "follow_tokens" ({ mint: { symbol, name } }), "follow_ca_recent" (last 6 CA searches)
+//       "follow_tokens" ({ mint: { symbol, name } }), "follow_ca_recent" (last 6 CA searches),
+//       "follow_labels" ({ wallet: name } — the user's own names for wallets, shown on the map)
+// Backup: followBackup() / followRestore() in follow-model.js — one JSON with follow_people, follow_tokens,
+// follow_labels, kol_saved_wallets and tracer_watched. Restoring only adds, never overwrites. The watcher reads this file.
 ```
 
 **UI:** `FollowGraph` (SVG; `followLayout` does "layers" and "radial"; pan by drag, zoom with ⌘/ctrl + wheel or the buttons; the view is derived from the layout until the user pans; it draws `followCollapse(graph)`, which merges dead-end exchanges under one parent into a single node — display only, the stored graph keeps every wallet), `FollowActivity` (headline, per-wallet cards, `FollowTimeline`, token table with a "Cazar" hand-off), `FollowProfile` (selected wallet: score, reasons for and against, flows, "Es su wallet"). The right panel has three tabs: Perfil, En vivo (`FollowLive`: real-time status, convergences of the last 24 h, the event feed) and CA (`FollowCA`: results of the sidebar search box).
@@ -128,5 +157,6 @@ Follow a person, not a wallet: map where the root wallet's SOL went (up to 3 hop
 - Do not cap buyer count with `maxBuyers` — the tool is also used for group trading detection, not just KOL hunting. Time window + min SOL filters are the correct levers.
 - Do not add global time/SOL controls — config is per-CA intentionally (different tokens need different windows).
 - Do not make unnecessary API calls — respect rate limits; the 1100ms sleep is required.
-- In the Follow view, do not filter Helius requests by `type` and do not detect trades from `tx.type` — most trades arrive labelled `TRANSFER`.
+- Do not filter Helius requests by `type` anywhere, and do not detect trades from `tx.type` — most trades arrive labelled `TRANSFER`.
+- Do not add exchange addresses to `KNOWN_EXCHANGES` from memory: labels could not be verified (the explorer blocks automated lookups) and a wrong label stops a trail. Users name wallets themselves (`follow_labels`).
 - Do not present Follow scores as facts: they are heuristics, and the UI must keep showing the reasons behind each one.

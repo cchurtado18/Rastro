@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Respaldos exportados (tienen a quién sigues)
+*respaldo*.json

@@ -26,4 +26,9 @@ export default defineConfig([
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
     },
   },
+  {
+    // Node code: the tests and the background watcher
+    files: ['tests/**/*.js', 'watcher/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
 ])
