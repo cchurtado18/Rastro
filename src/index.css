@@ -1,0 +1,2 @@
+/* Global resets live in index.html to co-locate with CSS design tokens */
+#root { min-height: 100vh; }
